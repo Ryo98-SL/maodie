@@ -29,12 +29,12 @@ Cargo owns crate-level incremental artifacts and writes them to the ignored `tar
 
 - `packages/language-core` should stay dependency-light and contain stable language-domain primitives.
 - `packages/compiler` owns the compile pipeline API and depends on `language-core`.
-- `packages/compiler-wasm` owns the TypeScript wrapper over the Rust WASM compiler ABI. Node tools may use its default ignored Cargo output path, while browser apps should provide their own asset URL, bytes, module, or instance.
+- `packages/compiler-wasm` owns the TypeScript wrapper over the Rust WASM compiler ABI. It exposes compile and lexer-backed highlight helpers while sharing the same Node/browser WASM loader. Node tools may use its default ignored Cargo output path, while browser apps should provide their own asset URL, bytes, module, or instance.
 - `packages/cli` owns process, filesystem, and terminal behavior for the command line.
 - `packages/ide-protocol` owns contracts shared by UI and future language-service code.
-- `apps/ide` owns browser UI and built-in workbench examples, and depends on `@maodie/compiler-wasm` for browser-side compilation instead of copying language behavior.
+- `apps/ide` owns browser UI, built-in workbench examples, and manual Run orchestration, and depends on `@maodie/compiler-wasm` for browser-side compilation instead of copying language behavior.
 - `crates/maodie_compiler` owns the Rust compiler facade and is the first Rust entry point for future compiler-core work.
-- `crates/maodie_wasm_api` owns the private pointer-level WASM ABI that returns the public JSON compile response consumed by `packages/compiler-wasm`.
+- `crates/maodie_wasm_api` owns the private pointer-level WASM ABI that returns the public JSON compile and highlight responses consumed by `packages/compiler-wasm`.
 
 Library packages emit build output into local `dist/` folders so package `exports`, `main`, and CLI `bin` entries remain valid when workspace packages are linked by pnpm.
 
@@ -60,8 +60,14 @@ The acceptance report lives at `docs/v1-acceptance-report.md`. Keep it synchroni
 
 Task 11 exposes the compiler through `@maodie/compiler-wasm`. Its public response shape is `CompileResponse` with `ok`, `diagnostics`, `artifacts`, and `dumps`. Artifacts currently include `module.wat` as text and `module.wasm` as `Uint8Array`. Dumps currently use `ast`, `hir`, `types`, `mir`, and `wat` keys when compilation reaches those stages.
 
+The same WASM boundary exposes `highlightMaodieSource` and `MaodieCompilerWasm.highlight` for syntax highlighting. Highlight responses contain `ok`, `tokens`, and `diagnostics` only; they call the Rust syntax highlight API and do not parse, type-check, lower, emit artifacts, or populate dumps.
+
+Syntax highlight fixtures live in `docs/tasks/highlighting/fixtures/`. `syntax-highlight.mao` and `syntax-highlight.tokens.json` are shared by Rust and TS tests to keep keyword, identifier, literal, comment, Chinese identifier, and error-token ranges aligned across runtime boundaries.
+
+`packages/compiler-wasm/src/ranges.ts` converts Rust UTF-8 byte ranges into editor-facing UTF-16 absolute offsets or 0-based line/character positions. Adapters should run highlight tokens through these helpers before handing ranges to browser editors, VSCode, or other UTF-16 APIs.
+
 The source-level `core.log(message: String) -> unit` function is host-backed. WASM codegen lowers string-literal calls such as `core.log("Hello world")` to `maodie.debug_string(ptr, len)`. CLI `maodie run` and the browser IDE evaluation host capture that import and show the resulting log text.
 
-The Rust crate `maodie_wasm_api` exports `maodie_alloc`, `maodie_dealloc`, `maodie_compile`, `maodie_response_len`, `maodie_response_bytes`, and `maodie_free_response`. That ABI is intentionally not a public app contract; downstream packages should call the TypeScript wrapper.
+The Rust crate `maodie_wasm_api` exports `maodie_alloc`, `maodie_dealloc`, `maodie_compile`, `maodie_highlight`, `maodie_response_len`, `maodie_response_bytes`, and `maodie_free_response`. That ABI is intentionally not a public app contract; downstream packages should call the TypeScript wrapper.
 
 `apps/ide` imports `target/wasm32-unknown-unknown/debug/maodie_wasm_api.wasm?url` through Vite. In dev, Vite serves that imported workspace asset; in production, Vite copies it into `dist/apps/ide/assets` and rewrites the runtime URL. Task 13 keeps compilation on the browser main thread and records that limitation in the IDE module docs so a later worker transport can replace only the compiler client boundary.

@@ -6,7 +6,7 @@ The IDE source module owns browser bootstrapping for the Maodie compile workbenc
 
 ## Current Directory Structure
 
-- `main.ts`: IDE state, example switching, debounced compile/evaluate scheduling, and DOM event wiring.
+- `main.ts`: IDE state, example switching, manual Run/evaluate scheduling, and DOM event wiring.
 - `examples.ts`: built-in workbench examples and the default v1 source.
 - `state.ts`: shared state and status types for the entry point and renderers.
 - `compilerClient.ts`: browser-side wrapper around `@maodie/compiler-wasm`, including the Vite `?url` WASM asset path, readable load failures, and `main` evaluation from emitted WASM.
@@ -18,7 +18,7 @@ The IDE source module owns browser bootstrapping for the Maodie compile workbenc
 
 ## Key Behaviors
 
-The module renders an editable `workspace/main.mao` document using the v1 acceptance example unless a smoke test passes `?source=` in the URL. The editor offers built-in example tabs for Hello World, function calls, Fibonacci, and the v1 comprehensive source; selecting one replaces the editor contents and immediately recompiles. Source changes trigger a debounced compile through the WASM wrapper and clear the selected example marker. Successful compiles also evaluate the emitted WASM `main(i32)` export with the current input value, showing raw `i32` output plus the v1 tag/payload decoding and `core.log` messages captured from `maodie.debug_string`. The diagnostics panel shows severity, code, Chinese compiler messages, notes, and source positions. The output panel switches between AST, HIR, MIR, WAT, and types dumps when the compiler response includes them.
+The module renders an editable `workspace/main.mao` document using the v1 acceptance example unless a smoke test passes `?source=` in the URL. The editor offers built-in example tabs for Hello World, function calls, Fibonacci, and the v1 comprehensive source; selecting one replaces the editor contents and waits for Run. Textarea input only updates in-memory source state and invalidates in-flight compile requests, avoiding a full workbench re-render on each keystroke. The workbench fills the browser viewport with `overflow-hidden`; the header is outside the scrolling area, the textarea owns editor scrolling, each right-side panel uses a flex column with a `min-h-0 flex-1 overflow-auto` content region, and side-by-side layout starts at 600px through Tailwind arbitrary breakpoint classes. Clicking Run compiles through the WASM wrapper and evaluates the emitted WASM `main(i32)` export with the current input value. The Evaluation panel appears before Diagnostics, puts `core.log` messages first, then shows call/raw/tag/payload cards and a variant card with both display text and JSON for the v1 `i32` enum encoding. The diagnostics panel shows severity, code, Chinese compiler messages, notes, and source positions. The output panel switches between AST, HIR, MIR, WAT, and types dumps when the compiler response includes them.
 
 ## Integration Notes
 

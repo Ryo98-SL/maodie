@@ -6,7 +6,7 @@ The docs module owns project documentation that guides Maodie language design, i
 
 ## Current Directory Structure
 
-- `tasks/`: staged Maodie v1 implementation handbook, including Rust workspace and Nx handoff records.
+- `tasks/`: staged Maodie v1 implementation handbook, highlighting task chain, shared fixtures, and editor adapter contracts.
 - `v1-acceptance-report.md`: completed v1 support/deferred capability report and acceptance validation log.
 - `core-stdlib.md`: v1 core library contract, including `Option`, `Result`, `Slice`, `String`, and `core.log`.
 
@@ -14,6 +14,7 @@ The docs module owns project documentation that guides Maodie language design, i
 
 - `tasks/README.md`: task graph, handoff protocol, and completion rules for Maodie v1.
 - `tasks/01-rust-workspace-and-nx-bridge.md`: Rust workspace, crate naming, and Nx bridge entry points.
+- `tasks/highlighting/README.md`: syntax highlighting task chain and links to Web IDE, VSCode, and JetBrains adapter contracts.
 - `v1-acceptance-report.md`: v1 closure checklist for examples, CLI, IDE, diagnostics, and future scope.
 
 ## Main Behaviors

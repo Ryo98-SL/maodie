@@ -1,0 +1,34 @@
+{
+  "sourcePath": "docs/tasks/highlighting/fixtures/syntax-highlight.mao",
+  "tokens": [
+    { "kind": "keyword", "range": { "start": 0, "end": 6 } },
+    { "kind": "identifier", "range": { "start": 7, "end": 13 } },
+    { "kind": "comment", "range": { "start": 15, "end": 29 } },
+    { "kind": "keyword", "range": { "start": 30, "end": 32 } },
+    { "kind": "identifier", "range": { "start": 33, "end": 37 } },
+    { "kind": "punctuation", "range": { "start": 37, "end": 38 } },
+    { "kind": "identifier", "range": { "start": 38, "end": 43 } },
+    { "kind": "punctuation", "range": { "start": 43, "end": 44 } },
+    { "kind": "identifier", "range": { "start": 45, "end": 48 } },
+    { "kind": "punctuation", "range": { "start": 48, "end": 49 } },
+    { "kind": "operator", "range": { "start": 50, "end": 52 } },
+    { "kind": "identifier", "range": { "start": 53, "end": 57 } },
+    { "kind": "punctuation", "range": { "start": 58, "end": 59 } },
+    { "kind": "keyword", "range": { "start": 62, "end": 65 } },
+    { "kind": "identifier", "range": { "start": 66, "end": 72 } },
+    { "kind": "operator", "range": { "start": 73, "end": 74 } },
+    { "kind": "number", "range": { "start": 75, "end": 77 } },
+    { "kind": "keyword", "range": { "start": 80, "end": 83 } },
+    { "kind": "identifier", "range": { "start": 84, "end": 88 } },
+    { "kind": "operator", "range": { "start": 89, "end": 90 } },
+    { "kind": "string", "range": { "start": 91, "end": 99 } },
+    { "kind": "comment", "range": { "start": 102, "end": 125 } },
+    { "kind": "keyword", "range": { "start": 128, "end": 134 } },
+    { "kind": "boolean", "range": { "start": 135, "end": 139 } },
+    { "kind": "error", "range": { "start": 140, "end": 141 } },
+    { "kind": "punctuation", "range": { "start": 142, "end": 143 } }
+  ],
+  "diagnostics": [
+    { "code": "MD0101", "range": { "start": 140, "end": 141 } }
+  ]
+}

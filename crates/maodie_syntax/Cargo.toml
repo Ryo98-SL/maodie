@@ -13,5 +13,8 @@ maodie_diagnostics = { path = "../maodie_diagnostics" }
 serde = { version = "1", features = ["derive"] }
 unicode-ident = "1"
 
+[dev-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

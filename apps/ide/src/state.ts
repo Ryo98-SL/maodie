@@ -3,7 +3,7 @@ import type { CompileResponse } from "@maodie/compiler-wasm";
 import type { EvaluationResult } from "./compilerClient";
 import type { WorkbenchExampleId } from "./examples";
 
-export type CompileStatus = "loading" | "compiling" | "ready" | "failed";
+export type CompileStatus = "idle" | "loading" | "compiling" | "ready" | "failed";
 export type DumpKey = "ast" | "hir" | "mir" | "wat" | "types";
 export type EvaluationStatus = "idle" | "running" | "ready" | "failed";
 

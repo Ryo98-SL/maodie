@@ -30,6 +30,7 @@ version = "0.1.0"
 dependencies = [
  "maodie_diagnostics",
  "serde",
+ "serde_json",
  "unicode-ident",
 ]
 

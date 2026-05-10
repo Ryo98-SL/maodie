@@ -20,6 +20,8 @@ export interface EvaluationResult {
     readonly tag: number;
     readonly payload: number;
     readonly variant: string;
+    readonly display: string;
+    readonly serialized: string;
   };
 }
 
@@ -136,11 +138,19 @@ function readGuestString(
 function decodeV1EnumResult(raw: number): EvaluationResult["decoded"] {
   const tag = raw & 0xff;
   const payload = raw >> 8;
-  const variant = tag === 0 ? "Ok/Some/first variant" : tag === 1 ? "Err/None/second variant" : `tag ${tag}`;
+  const variant = tag === 0 ? "Ok" : tag === 1 ? "Err" : `tag ${tag}`;
+  const decodedValue = {
+    type: "Result",
+    variant,
+    value: payload,
+    raw
+  };
 
   return {
     tag,
     payload,
-    variant
+    variant,
+    display: `Result.${variant}(${payload})`,
+    serialized: JSON.stringify(decodedValue, null, 2)
   };
 }

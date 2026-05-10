@@ -23,10 +23,9 @@ if (!root) {
 
 const appRoot = root;
 
-let compileTimer: number | undefined;
 let state: IdeState = {
   ...initialSourceState(),
-  status: "loading",
+  status: "idle",
   activeDump: "ast",
   result: undefined,
   evalInput: "2",
@@ -36,29 +35,33 @@ let state: IdeState = {
 };
 
 render();
-void scheduleCompile(0);
 
 function render(): void {
   appRoot.innerHTML = renderWorkbench(state);
 
   appRoot.querySelector<HTMLTextAreaElement>("#source-editor")?.addEventListener("input", (event) => {
     const source = (event.currentTarget as HTMLTextAreaElement).value;
-    state = { ...state, source, activeExampleId: undefined, status: "compiling" };
-    render();
-    void scheduleCompile(350);
+    state = {
+      ...state,
+      source,
+      activeExampleId: undefined,
+      status: "idle",
+      result: undefined,
+      evaluation: { status: "idle", result: undefined, errorMessage: undefined },
+      errorMessage: undefined,
+      requestId: state.requestId + 1
+    };
   });
   appRoot.querySelector<HTMLButtonElement>("#compile-button")?.addEventListener("click", () => {
     state = { ...state, status: "compiling" };
     render();
-    void scheduleCompile(0);
+    void runSource();
   });
   appRoot.querySelector<HTMLInputElement>("#eval-input")?.addEventListener("input", (event) => {
     state = {
       ...state,
-      evalInput: (event.currentTarget as HTMLInputElement).value,
-      evaluation: { status: "idle", result: undefined, errorMessage: undefined }
+      evalInput: (event.currentTarget as HTMLInputElement).value
     };
-    render();
   });
   appRoot.querySelector<HTMLButtonElement>("#evaluate-button")?.addEventListener("click", () => {
     void scheduleEvaluation(state.requestId);
@@ -74,10 +77,13 @@ function render(): void {
         ...state,
         source: example.source,
         activeExampleId: example.id,
-        status: "compiling"
+        status: "idle",
+        result: undefined,
+        evaluation: { status: "idle", result: undefined, errorMessage: undefined },
+        errorMessage: undefined,
+        requestId: state.requestId + 1
       };
       render();
-      void scheduleCompile(0);
     });
   });
   appRoot.querySelectorAll<HTMLButtonElement>("[data-dump]").forEach((button) => {
@@ -88,22 +94,18 @@ function render(): void {
   });
 }
 
-async function scheduleCompile(delayMs: number): Promise<void> {
-  if (compileTimer !== undefined) {
-    window.clearTimeout(compileTimer);
-  }
-
+async function runSource(): Promise<void> {
   const requestId = state.requestId + 1;
   state = {
     ...state,
     requestId,
-    status: requestId === 1 ? "loading" : "compiling",
+    status: "compiling",
+    result: undefined,
+    errorMessage: undefined,
     evaluation: { status: "idle", result: undefined, errorMessage: undefined }
   };
 
-  compileTimer = window.setTimeout(() => {
-    void runCompile(requestId, state.source);
-  }, delayMs);
+  await runCompile(requestId, state.source);
 }
 
 async function runCompile(requestId: number, source: string): Promise<void> {

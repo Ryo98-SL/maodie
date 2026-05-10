@@ -7,7 +7,7 @@ export function renderEvaluation(state: IdeState): string {
     return diagnosticPanel("info", "等待编译器", "WASM 编译器加载成功后才能执行。");
   }
   if (!state.result) {
-    return diagnosticPanel("info", "等待编译", "还没有可执行的 WASM artifact。");
+    return diagnosticPanel("info", "等待运行", "点击 Run 编译并执行当前源码。");
   }
   if (!state.result.ok) {
     return diagnosticPanel("error", "未执行", "当前源码有诊断错误。");
@@ -26,6 +26,10 @@ export function renderEvaluation(state: IdeState): string {
 
   return `
     <div class="grid grid-cols-2 gap-3 text-sm">
+      <div class="col-span-2 rounded border border-neutral-800 bg-neutral-900/40 p-3">
+        <p class="text-xs text-neutral-500">logs</p>
+        <pre class="mt-2 whitespace-pre-wrap font-mono text-cyan-100">${escapeHtml(renderLogs(result.logs))}</pre>
+      </div>
       <div class="rounded border border-neutral-800 bg-neutral-900/40 p-3">
         <p class="text-xs text-neutral-500">call</p>
         <p class="mt-2 font-mono text-cyan-100">${escapeHtml(result.exportName)}(${result.input})</p>
@@ -44,11 +48,8 @@ export function renderEvaluation(state: IdeState): string {
       </div>
       <div class="col-span-2 rounded border border-neutral-800 bg-neutral-900/40 p-3">
         <p class="text-xs text-neutral-500">variant</p>
-        <p class="mt-2 font-mono text-cyan-100">${escapeHtml(result.decoded.variant)}</p>
-      </div>
-      <div class="col-span-2 rounded border border-neutral-800 bg-neutral-900/40 p-3">
-        <p class="text-xs text-neutral-500">logs</p>
-        <pre class="mt-2 whitespace-pre-wrap font-mono text-cyan-100">${escapeHtml(renderLogs(result.logs))}</pre>
+        <p class="mt-2 font-mono text-cyan-100">${escapeHtml(result.decoded.display)}</p>
+        <pre class="mt-3 whitespace-pre-wrap rounded border border-neutral-800 bg-neutral-950 p-3 font-mono text-xs leading-5 text-cyan-50">${escapeHtml(result.decoded.serialized)}</pre>
       </div>
     </div>
   `;
@@ -62,7 +63,7 @@ export function renderDiagnostics(state: IdeState): string {
     return diagnosticPanel("info", "正在加载编译器", "首次编译会获取 Rust WASM 产物。");
   }
   if (state.status === "compiling") {
-    return diagnosticPanel("info", "正在编译", "源码变更后诊断会自动刷新。");
+    return diagnosticPanel("info", "正在运行", "当前源码正在编译，成功后会执行 main。");
   }
 
   const diagnostics = state.result?.diagnostics ?? [];

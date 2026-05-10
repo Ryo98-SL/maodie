@@ -1,6 +1,23 @@
 export type CompileTarget = "wasm";
 export type DiagnosticSeverity = "error" | "warning" | "info";
 export type ArtifactKind = "wat" | "wasm";
+export {
+  byteOffsetToUtf16Offset,
+  byteOffsetToUtf16Position,
+  byteRangeToUtf16LineColumnRange,
+  byteRangeToUtf16Range
+} from "./ranges.js";
+export type { ByteRange, Utf16LineColumnRange, Utf16OffsetRange, Utf16Position } from "./ranges.js";
+export type HighlightKind =
+  | "keyword"
+  | "identifier"
+  | "comment"
+  | "string"
+  | "number"
+  | "boolean"
+  | "operator"
+  | "punctuation"
+  | "error";
 
 export interface CompileOptions {
   readonly sourcePath?: string;
@@ -42,6 +59,24 @@ export interface CompileResponse {
   readonly dumps: Readonly<Record<string, string>>;
 }
 
+export interface HighlightOptions {
+  readonly sourcePath?: string;
+}
+
+export interface HighlightToken {
+  readonly kind: HighlightKind;
+  readonly range: {
+    readonly start: number;
+    readonly end: number;
+  };
+}
+
+export interface HighlightResponse {
+  readonly ok: boolean;
+  readonly tokens: readonly HighlightToken[];
+  readonly diagnostics: readonly Diagnostic[];
+}
+
 export interface CompilerWasmLoaderOptions {
   readonly wasmUrl?: string | URL;
   readonly wasmBytes?: ArrayBuffer | Uint8Array;
@@ -68,6 +103,12 @@ interface CompilerWasmExports extends WebAssembly.Exports {
   readonly maodie_alloc: (len: number) => number;
   readonly maodie_dealloc: (pointer: number, len: number) => void;
   readonly maodie_compile: (
+    sourcePointer: number,
+    sourceLen: number,
+    optionsPointer: number,
+    optionsLen: number
+  ) => number;
+  readonly maodie_highlight: (
     sourcePointer: number,
     sourceLen: number,
     optionsPointer: number,
@@ -110,6 +151,41 @@ export class MaodieCompilerWasm {
   }
 
   compile(source: string, options: CompileOptions = {}): CompileResponse {
+    const raw = this.#callJsonApi<RawCompileResponse>(
+      source,
+      options,
+      this.#exports.maodie_compile
+    );
+
+    return {
+      ok: raw.ok,
+      diagnostics: raw.diagnostics,
+      artifacts: raw.artifacts.map((artifact) => ({
+        kind: artifact.kind,
+        filename: artifact.filename,
+        content:
+          typeof artifact.content === "string"
+            ? artifact.content
+            : Uint8Array.from(artifact.content)
+      })),
+      dumps: raw.dumps
+    };
+  }
+
+  highlight(source: string, options: HighlightOptions = {}): HighlightResponse {
+    return this.#callJsonApi<HighlightResponse>(source, options, this.#exports.maodie_highlight);
+  }
+
+  #callJsonApi<TResponse>(
+    source: string,
+    options: object,
+    call: (
+      sourcePointer: number,
+      sourceLen: number,
+      optionsPointer: number,
+      optionsLen: number
+    ) => number
+  ): TResponse {
     const sourceBytes = textEncoder.encode(source);
     const optionsBytes = textEncoder.encode(JSON.stringify(options));
     const sourcePointer = this.#copyIntoWasm(sourceBytes);
@@ -117,7 +193,7 @@ export class MaodieCompilerWasm {
     let responsePointer = 0;
 
     try {
-      responsePointer = this.#exports.maodie_compile(
+      responsePointer = call(
         sourcePointer,
         sourceBytes.byteLength,
         optionsPointer,
@@ -139,7 +215,7 @@ export class MaodieCompilerWasm {
     return pointer;
   }
 
-  #readResponse(responsePointer: number): CompileResponse {
+  #readResponse<TResponse>(responsePointer: number): TResponse {
     const responseLen = this.#exports.maodie_response_len(responsePointer);
     const responseBytesPointer = this.#exports.maodie_response_bytes(responsePointer);
     const responseBytes = new Uint8Array(
@@ -147,21 +223,7 @@ export class MaodieCompilerWasm {
       responseBytesPointer,
       responseLen
     );
-    const raw = JSON.parse(textDecoder.decode(responseBytes)) as RawCompileResponse;
-
-    return {
-      ok: raw.ok,
-      diagnostics: raw.diagnostics,
-      artifacts: raw.artifacts.map((artifact) => ({
-        kind: artifact.kind,
-        filename: artifact.filename,
-        content:
-          typeof artifact.content === "string"
-            ? artifact.content
-            : Uint8Array.from(artifact.content)
-      })),
-      dumps: raw.dumps
-    };
+    return JSON.parse(textDecoder.decode(responseBytes)) as TResponse;
   }
 }
 
@@ -175,19 +237,29 @@ export async function compileMaodieWasm(
   source: string,
   options: CompileOptions & CompilerWasmLoaderOptions = {}
 ): Promise<CompileResponse> {
-  const { compilerOptions, loaderOptions } = splitOptions(options);
+  const { apiOptions, loaderOptions } = splitCompileOptions(options);
   defaultCompiler ??= createCompilerWasm(loaderOptions);
   const compiler = await defaultCompiler;
-  return compiler.compile(source, compilerOptions);
+  return compiler.compile(source, apiOptions);
 }
 
-function splitOptions(
+export async function highlightMaodieSource(
+  source: string,
+  options: HighlightOptions & CompilerWasmLoaderOptions = {}
+): Promise<HighlightResponse> {
+  const { apiOptions, loaderOptions } = splitHighlightOptions(options);
+  defaultCompiler ??= createCompilerWasm(loaderOptions);
+  const compiler = await defaultCompiler;
+  return compiler.highlight(source, apiOptions);
+}
+
+function splitCompileOptions(
   options: CompileOptions & CompilerWasmLoaderOptions
 ): {
-  compilerOptions: CompileOptions;
+  apiOptions: CompileOptions;
   loaderOptions: CompilerWasmLoaderOptions;
 } {
-  const compilerOptions: CompileOptions = {
+  const apiOptions: CompileOptions = {
     ...(options.sourcePath ? { sourcePath: options.sourcePath } : {}),
     ...(options.moduleName ? { moduleName: options.moduleName } : {}),
     ...(options.target ? { target: options.target } : {})
@@ -200,7 +272,27 @@ function splitOptions(
     ...(options.imports ? { imports: options.imports } : {})
   };
 
-  return { compilerOptions, loaderOptions };
+  return { apiOptions, loaderOptions };
+}
+
+function splitHighlightOptions(
+  options: HighlightOptions & CompilerWasmLoaderOptions
+): {
+  apiOptions: HighlightOptions;
+  loaderOptions: CompilerWasmLoaderOptions;
+} {
+  const apiOptions: HighlightOptions = {
+    ...(options.sourcePath ? { sourcePath: options.sourcePath } : {})
+  };
+  const loaderOptions: CompilerWasmLoaderOptions = {
+    ...(options.wasmUrl ? { wasmUrl: options.wasmUrl } : {}),
+    ...(options.wasmBytes ? { wasmBytes: options.wasmBytes } : {}),
+    ...(options.wasmModule ? { wasmModule: options.wasmModule } : {}),
+    ...(options.instance ? { instance: options.instance } : {}),
+    ...(options.imports ? { imports: options.imports } : {})
+  };
+
+  return { apiOptions, loaderOptions };
 }
 
 function assertCompilerExports(exports: WebAssembly.Exports): CompilerWasmExports {
@@ -209,6 +301,7 @@ function assertCompilerExports(exports: WebAssembly.Exports): CompilerWasmExport
     "maodie_alloc",
     "maodie_dealloc",
     "maodie_compile",
+    "maodie_highlight",
     "maodie_response_len",
     "maodie_response_bytes",
     "maodie_free_response"
