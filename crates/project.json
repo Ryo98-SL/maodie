@@ -1,0 +1,50 @@
+{
+  "name": "rust",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "crates",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/target"],
+      "options": {
+        "command": "cargo build --workspace"
+      }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "outputs": [],
+      "options": {
+        "command": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+      }
+    },
+    "fmt": {
+      "executor": "nx:run-commands",
+      "outputs": [],
+      "options": {
+        "command": "cargo fmt --all --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "outputs": [],
+      "options": {
+        "command": "cargo clippy --workspace --all-targets -- -D warnings"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "outputs": [],
+      "options": {
+        "command": "cargo test --workspace"
+      }
+    },
+    "wasm-build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/target/wasm32-unknown-unknown"],
+      "options": {
+        "command": "cargo build --workspace --target wasm32-unknown-unknown"
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@maodie/ide",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@maodie/compiler-wasm": "workspace:*",
+    "@maodie/ide-protocol": "workspace:*"
+  },
+  "devDependencies": {}
+}

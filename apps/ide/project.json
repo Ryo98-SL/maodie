@@ -1,0 +1,40 @@
+{
+  "name": "ide",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/ide/src",
+  "projectType": "application",
+  "implicitDependencies": ["compiler-wasm", "ide-protocol"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/ide"],
+      "options": {
+        "command": "vite build --config apps/ide/vite.config.ts"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vite --config apps/ide/vite.config.ts"
+      }
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vite preview --config apps/ide/vite.config.ts"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -b apps/ide/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --passWithNoTests apps/ide/src"
+      }
+    }
+  }
+}

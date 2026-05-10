@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "rootDir": "src",
+    "outDir": "../../dist/apps/ide/tsc",
+    "tsBuildInfoFile": "../../dist/apps/ide/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/compiler-wasm" },
+    { "path": "../../packages/ide-protocol" }
+  ]
+}

@@ -1,0 +1,17 @@
+[package]
+name = "maodie_syntax"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "maodie_syntax"
+path = "src/lib.rs"
+
+[dependencies]
+maodie_diagnostics = { path = "../maodie_diagnostics" }
+serde = { version = "1", features = ["derive"] }
+unicode-ident = "1"
+
+[lints]
+workspace = true

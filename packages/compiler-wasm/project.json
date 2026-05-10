@@ -1,0 +1,28 @@
+{
+  "name": "compiler-wasm",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/compiler-wasm/src",
+  "projectType": "library",
+  "implicitDependencies": ["rust"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist", "{workspaceRoot}/target/wasm32-unknown-unknown"],
+      "options": {
+        "command": "cargo build -p maodie_wasm_api --target wasm32-unknown-unknown && tsc -b packages/compiler-wasm/tsconfig.json"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -b packages/compiler-wasm/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build -p maodie_wasm_api --target wasm32-unknown-unknown && vitest run --passWithNoTests packages/compiler-wasm/src"
+      }
+    }
+  }
+}

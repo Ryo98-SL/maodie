@@ -1,0 +1,67 @@
+# Maodie Program Language Deep README
+
+## Repository Shape
+
+This repository is an Nx monorepo using pnpm workspaces. Project configuration lives next to each package or app in `project.json`, while shared task behavior lives in `nx.json`.
+
+Root package scripts run Nx with `NX_DAEMON=false` and `NX_ISOLATE_PLUGINS=false`. This keeps project graph calculation in-process, which is friendlier to the current local sandbox while preserving Nx task orchestration and caching.
+
+The Rust compiler core is a Cargo workspace rooted at the repository `Cargo.toml`. Rust crates live under `crates/` and use the `maodie_*` naming convention; task 01 establishes `crates/maodie_compiler` as the minimal facade crate.
+
+## Task Orchestration
+
+- `build`: compiles each project and runs dependency builds first through Nx `dependsOn`.
+- `typecheck`: validates project TypeScript using the same project graph ordering.
+- `test`: runs Vitest where tests exist and allows empty projects to keep new modules cheap.
+- `dev`: currently exists on `apps/ide` for local Vite development.
+- `rust:build`, `rust:test`, `rust:check`, and `rust:wasm` are package scripts that delegate to Nx project `rust`.
+
+Nx exposes the Rust bridge as project `rust` from `crates/project.json`:
+
+- `pnpm nx run rust:build`: `cargo build --workspace`.
+- `pnpm nx run rust:test`: `cargo test --workspace`.
+- `pnpm nx run rust:check`: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo test --workspace`.
+- `pnpm nx run rust:wasm-build`: `cargo build --workspace --target wasm32-unknown-unknown`.
+
+Cargo owns crate-level incremental artifacts and writes them to the ignored `target/` directory. Nx treats `target/` as the Rust build output boundary and does not try to relocate Cargo's own cache. The WASM target requires the Rust toolchain component `wasm32-unknown-unknown`.
+
+## Project Boundaries
+
+- `packages/language-core` should stay dependency-light and contain stable language-domain primitives.
+- `packages/compiler` owns the compile pipeline API and depends on `language-core`.
+- `packages/compiler-wasm` owns the TypeScript wrapper over the Rust WASM compiler ABI. Node tools may use its default ignored Cargo output path, while browser apps should provide their own asset URL, bytes, module, or instance.
+- `packages/cli` owns process, filesystem, and terminal behavior for the command line.
+- `packages/ide-protocol` owns contracts shared by UI and future language-service code.
+- `apps/ide` owns browser UI and built-in workbench examples, and depends on `@maodie/compiler-wasm` for browser-side compilation instead of copying language behavior.
+- `crates/maodie_compiler` owns the Rust compiler facade and is the first Rust entry point for future compiler-core work.
+- `crates/maodie_wasm_api` owns the private pointer-level WASM ABI that returns the public JSON compile response consumed by `packages/compiler-wasm`.
+
+Library packages emit build output into local `dist/` folders so package `exports`, `main`, and CLI `bin` entries remain valid when workspace packages are linked by pnpm.
+
+## Documentation Convention
+
+Each module folder has an `index.md` describing purpose, layout, and integration boundaries. When a direct child directory is added inside a module, its own `index.md` should be created or updated in the same change.
+
+The v1 task handbook lives in `docs/tasks`. Each task file is both an implementation brief and a handoff contract. A task is not complete until its `交接记录` section names completed outputs, public interface changes, validation commands, known limits, and the next task entry point.
+
+## Future Implementation Slots
+
+The compiler package is ready for dedicated folders such as `lexer`, `parser`, `checker`, `ir`, and `backend` once the language design is finalized. The IDE app is ready to connect to a language-service layer through `packages/ide-protocol`.
+
+The current v1 route is Rust compiler core, hand-written parser, AST/HIR/MIR internal IR, WASM-first backend, TypeScript wrapper packages, and browser IDE integration.
+
+## V1 Acceptance Suite
+
+Task 14 closes v1 with checked examples and smoke tests instead of new language features. `examples/v1_acceptance.mao` is the canonical success fixture and is mirrored by `examples/main.mao` plus `apps/ide/src/examples.ts`'s `defaultSource`. The IDE source catalog also carries simpler Hello World, function-call, and Fibonacci examples for tabbed workbench switching. `examples/v1_surface.mao` keeps declaration-surface coverage visible, and `examples/v1_error.mao` locks stable Chinese diagnostics.
+
+The acceptance report lives at `docs/v1-acceptance-report.md`. Keep it synchronized when v1 support changes, especially around supported language surface, deferred capabilities, and manual validation commands. `examples/hello_world.mao` is the smallest runtime logging fixture and uses `core.log("Hello world")`.
+
+## WASM Compiler Boundary
+
+Task 11 exposes the compiler through `@maodie/compiler-wasm`. Its public response shape is `CompileResponse` with `ok`, `diagnostics`, `artifacts`, and `dumps`. Artifacts currently include `module.wat` as text and `module.wasm` as `Uint8Array`. Dumps currently use `ast`, `hir`, `types`, `mir`, and `wat` keys when compilation reaches those stages.
+
+The source-level `core.log(message: String) -> unit` function is host-backed. WASM codegen lowers string-literal calls such as `core.log("Hello world")` to `maodie.debug_string(ptr, len)`. CLI `maodie run` and the browser IDE evaluation host capture that import and show the resulting log text.
+
+The Rust crate `maodie_wasm_api` exports `maodie_alloc`, `maodie_dealloc`, `maodie_compile`, `maodie_response_len`, `maodie_response_bytes`, and `maodie_free_response`. That ABI is intentionally not a public app contract; downstream packages should call the TypeScript wrapper.
+
+`apps/ide` imports `target/wasm32-unknown-unknown/debug/maodie_wasm_api.wasm?url` through Vite. In dev, Vite serves that imported workspace asset; in production, Vite copies it into `dist/apps/ide/assets` and rewrites the runtime URL. Task 13 keeps compilation on the browser main thread and records that limitation in the IDE module docs so a later worker transport can replace only the compiler client boundary.

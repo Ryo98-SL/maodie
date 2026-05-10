@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/maodie_compiler",
+    "crates/maodie_diagnostics",
+    "crates/maodie_syntax",
+    "crates/maodie_wasm_api",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

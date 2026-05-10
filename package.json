@@ -1,0 +1,33 @@
+{
+  "name": "maodie-program-language",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "nx": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx",
+    "build": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run-many -t build",
+    "typecheck": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run-many -t typecheck",
+    "test": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run-many -t test",
+    "rust:build": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run rust:build",
+    "rust:check": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run rust:check",
+    "rust:test": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run rust:test",
+    "rust:wasm": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx run rust:wasm-build",
+    "ide:dev": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx dev ide",
+    "ide:build": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx build ide",
+    "graph": "env NX_DAEMON=false NX_ISOLATE_PLUGINS=false nx graph",
+    "style:guard": "node tools/style-guard.mjs",
+    "style:guard:all": "node tools/style-guard.mjs --all"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "nx": "^20.3.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  }
+}

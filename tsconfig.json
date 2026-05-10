@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/language-core" },
+    { "path": "packages/ide-protocol" },
+    { "path": "packages/compiler" },
+    { "path": "packages/cli" },
+    { "path": "apps/ide" }
+  ]
+}

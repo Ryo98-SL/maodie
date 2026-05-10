@@ -1,0 +1,16 @@
+[package]
+name = "maodie_wasm_api"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "maodie_wasm_api"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+maodie_compiler = { path = "../maodie_compiler" }
+maodie_diagnostics = { path = "../maodie_diagnostics" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
