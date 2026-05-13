@@ -8,3 +8,6 @@ target/
 *.tsbuildinfo
 .DS_Store
 *.log
+
+# Synced from assets/logo.webp by apps/ide/vite.config.ts at dev/build time
+apps/ide/public/favicon.webp

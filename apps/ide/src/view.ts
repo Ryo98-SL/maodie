@@ -33,7 +33,8 @@ export function renderWorkbench(state: IdeState): string {
                 <p class="text-sm font-medium text-neutral-100">${sourcePath}</p>
                 <p class="mt-1 text-xs text-neutral-500">${escapeHtml(compilerWasmDisplayUrl())}</p>
               </div>
-              <button id="compile-button" class="rounded border border-cyan-500/50 px-3 py-2 text-sm font-medium text-cyan-100 hover:bg-cyan-500/10 focus:outline-none focus:ring-2 focus:ring-cyan-400">
+              <button id="compile-button" class="inline-flex items-center gap-2 rounded-md bg-cyan-500 px-5 py-2.5 text-base font-bold uppercase tracking-wide text-neutral-950 shadow-lg shadow-cyan-500/40 transition hover:bg-cyan-400 active:bg-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:ring-offset-2 focus:ring-offset-neutral-950">
+                <span aria-hidden="true">▶</span>
                 Run
               </button>
             </div>

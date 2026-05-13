@@ -1,5 +1,5 @@
 import { defaultSource } from "./compilerClient";
-import { defaultExampleId } from "./examples";
+import { defaultExampleId, workbenchExamples } from "./examples";
 import type { IdeState } from "./state";
 
 export function createInitialSourceState(
@@ -10,5 +10,9 @@ export function createInitialSourceState(
     return { source: sourceParam, activeExampleId: undefined };
   }
 
-  return { source: defaultSource, activeExampleId: defaultExampleId };
+  const defaultExample = workbenchExamples.find((example) => example.id === defaultExampleId);
+  return {
+    source: defaultExample?.source ?? defaultSource,
+    activeExampleId: defaultExampleId
+  };
 }

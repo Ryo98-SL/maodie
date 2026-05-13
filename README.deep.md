@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/logo.webp" alt="Maodie logo" width="120" height="120" />
+</p>
+
 # Maodie Program Language Deep README
 
 ## Repository Shape

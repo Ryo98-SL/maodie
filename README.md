@@ -1,6 +1,18 @@
+<p align="center">
+  <img src="./assets/logo.webp" alt="Maodie logo" width="160" height="160" />
+</p>
+
 # Maodie Program Language
 
-Maodie is a planned compiled programming language with a companion IDE. This repository starts as an Nx-powered monorepo so the compiler, command line tooling, IDE shell, and shared protocol contracts can evolve together without losing clear project boundaries.
+> 中文文档： [README.zh-CN.md](./README.zh-CN.md)
+
+Maodie is an experimental language that aims to combine a TypeScript-style structural type system with Rust-style syntax and a strict, explicit error-handling model. It is a planned compiled programming language with a companion IDE. This repository starts as an Nx-powered monorepo so the compiler, command line tooling, IDE shell, and shared protocol contracts can evolve together without losing clear project boundaries.
+
+## Language Goals
+
+- **TS-like type system** — structural types, generics, unions, and gradual typing ergonomics.
+- **Rust-like syntax** — expression-oriented blocks, `fn` / `let mut` / `match`, traits/impls, and explicit ownership cues.
+- **Strict error handling** — no implicit exceptions; failures flow through `Result<T, E>` / `Option<T>` and propagate with `?`, surfaced by the compiler as machine-checkable diagnostics.
 
 ## Projects
 

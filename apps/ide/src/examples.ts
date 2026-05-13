@@ -103,7 +103,7 @@ fn main(value: i32) -> Result<i32, String> {
 }
 `;
 
-export const defaultExampleId: WorkbenchExampleId = "v1";
+export const defaultExampleId: WorkbenchExampleId = "hello";
 
 export const workbenchExamples: readonly WorkbenchExample[] = [
   {
