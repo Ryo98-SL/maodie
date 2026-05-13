@@ -279,6 +279,7 @@ async function executeMain(
   }
 
   const logs: string[] = [];
+  let logChunks: string[] = [];
   let instance: WebAssembly.Instance | undefined;
   const module = await WebAssembly.compile(artifactBytes(wasm));
   instance = await WebAssembly.instantiate(module, {
@@ -287,7 +288,17 @@ async function executeMain(
         throw new Error(readGuestString(instance, pointer, length) || "Maodie panic");
       },
       debug_string: (pointer: number, length: number) => {
-        logs.push(readGuestString(instance, pointer, length));
+        logChunks.push(readGuestString(instance, pointer, length));
+      },
+      debug_i32: (value: number) => {
+        logChunks.push(String(value | 0));
+      },
+      debug_bool: (value: number) => {
+        logChunks.push(value === 0 ? "false" : "true");
+      },
+      debug_log_end: () => {
+        logs.push(logChunks.join(""));
+        logChunks = [];
       }
     }
   });
@@ -299,6 +310,9 @@ async function executeMain(
   const raw = main(input);
   if (typeof raw !== "number") {
     return { ok: false, message: "错误[MD9002]: main 返回值不是 i32 number。" };
+  }
+  if (logChunks.length > 0) {
+    logs.push(logChunks.join(""));
   }
 
   return { ok: true, raw, logs };

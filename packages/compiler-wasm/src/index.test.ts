@@ -11,6 +11,10 @@ import {
   type HighlightKind,
   type HighlightToken
 } from "./index.js";
+import {
+  createHighlightWorkerRequestHandler,
+  isStaleHighlightWorkerResponse
+} from "./highlight.worker.js";
 
 interface HighlightGolden {
   readonly sourcePath: string;
@@ -211,6 +215,173 @@ fn main() -> bool {
     expect(byteRangeToUtf16Range(fixture.source, chineseName!.range)).toEqual({
       start: 58,
       end: 60
+    });
+  });
+
+  it("keeps an incremental highlight session across update, reset, and dispose", async () => {
+    const compiler = await createCompilerWasm();
+    const session = compiler.createHighlightSession("let x = 1\n", {
+      sourcePath: "session.mao",
+      editorVersion: 1
+    });
+
+    expect(session.current).toMatchObject({
+      ok: true,
+      editorVersion: 1,
+      sessionVersion: 0,
+      changedRange: {
+        start: 0,
+        end: 10
+      },
+      fullRehighlight: true
+    });
+
+    const update = session.update({
+      editorVersion: 2,
+      range: {
+        start: 8,
+        end: 9
+      },
+      replacement: "2"
+    });
+
+    expect(update).toMatchObject({
+      ok: true,
+      editorVersion: 2,
+      sessionVersion: 1,
+      fullRehighlight: false
+    });
+    expect(update.tokens).toEqual(
+      compiler.highlight("let x = 2\n", {
+        sourcePath: "session.mao"
+      }).tokens
+    );
+
+    const reset = session.reset("let y = @\n", {
+      sourcePath: "reset.mao",
+      editorVersion: 3
+    });
+
+    expect(reset).toMatchObject({
+      ok: false,
+      editorVersion: 3,
+      sessionVersion: 2,
+      fullRehighlight: true
+    });
+    expect(reset.diagnostics[0]).toMatchObject({
+      code: "MD0101",
+      severity: "error"
+    });
+    expect(session.sessionVersion).toBe(2);
+
+    session.dispose();
+    expect(session.disposed).toBe(true);
+    expect(() =>
+      session.update({
+        editorVersion: 4,
+        range: {
+          start: 0,
+          end: 0
+        },
+        replacement: ""
+      })
+    ).toThrow("disposed Maodie highlight session");
+    session.dispose();
+  });
+
+  it("rejects highlight session updates with stale session versions", async () => {
+    const compiler = await createCompilerWasm();
+    const session = compiler.createHighlightSession("let x = 1\n", {
+      editorVersion: 1
+    });
+    const first = session.update({
+      editorVersion: 2,
+      range: {
+        start: 8,
+        end: 9
+      },
+      replacement: "2"
+    });
+    const stale = session.update({
+      editorVersion: 3,
+      sessionVersion: 0,
+      range: {
+        start: 8,
+        end: 9
+      },
+      replacement: "3"
+    });
+
+    expect(first.ok).toBe(true);
+    expect(stale.ok).toBe(false);
+    expect(stale.sessionVersion).toBe(1);
+    expect(stale.diagnostics[0]?.message).toContain("version mismatch");
+    expect(session.sessionVersion).toBe(1);
+    session.dispose();
+  });
+
+  it("handles incremental highlight requests through the worker protocol", async () => {
+    const handleRequest = createHighlightWorkerRequestHandler();
+    const init = await handleRequest({
+      type: "init",
+      requestId: "init-1",
+      editorVersion: 1,
+      source: "let x = 1\n",
+      options: {
+        sourcePath: "worker.mao"
+      }
+    });
+
+    expect(init).toMatchObject({
+      type: "init",
+      requestId: "init-1",
+      ok: true,
+      editorVersion: 1,
+      sessionVersion: 0
+    });
+
+    const update = await handleRequest({
+      type: "update",
+      requestId: "update-1",
+      editorVersion: 2,
+      sessionVersion: init.sessionVersion,
+      edit: {
+        range: {
+          start: 8,
+          end: 9
+        },
+        replacement: "@"
+      }
+    });
+
+    expect(update).toMatchObject({
+      type: "update",
+      requestId: "update-1",
+      ok: false,
+      editorVersion: 2,
+      sessionVersion: 1
+    });
+    if (update.type !== "update") {
+      throw new Error(`Expected update response, got ${update.type}.`);
+    }
+    expect(update.diagnostics[0]).toMatchObject({
+      code: "MD0101"
+    });
+    expect(isStaleHighlightWorkerResponse(update, 3)).toBe(true);
+    expect(isStaleHighlightWorkerResponse(update, 2, 1)).toBe(false);
+
+    const dispose = await handleRequest({
+      type: "dispose",
+      requestId: "dispose-1",
+      editorVersion: 3
+    });
+
+    expect(dispose).toMatchObject({
+      type: "dispose",
+      requestId: "dispose-1",
+      ok: true,
+      editorVersion: 3,
+      sessionVersion: 1
     });
   });
 });

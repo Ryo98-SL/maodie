@@ -27,12 +27,14 @@
 12. `12-cli-integration.md`
 13. `13-ide-integration.md`
 14. `14-v1-acceptance-suite.md`
+15. `15-core-log-formatting.md`
 
 任务 01-10 是核心主线。任务 12 和 13 在任务 11 的 WASM API 稳定后可以并行推进。任务 14 必须等 10-13 都完成后执行。
 
 ## 后续专题任务
 
 - `highlighting/README.md`：语法级代码染色任务链，包含通用 highlight API、WASM/TS wrapper、跨 IDE 适配契约，以及每个任务独立的交接文档和验收文档。
+- `15-core-log-formatting.md`：v1 闭环后的 core 日志格式化专题任务，记录 `{}` 插值、直接 `String` handle 和 CLI/IDE log chunk flushing。
 
 ## 依赖图
 

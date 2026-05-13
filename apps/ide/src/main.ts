@@ -1,10 +1,15 @@
 import type { CompileResponse } from "@maodie/compiler-wasm";
 import {
   compileBrowserSource,
-  defaultSource,
-  evaluateMain
+  compilerWasmDisplayUrl,
+  evaluateMain,
+  sourcePath
 } from "./compilerClient";
-import { defaultExampleId, workbenchExamples } from "./examples";
+import { type MaodieEditor, createMaodieEditor } from "./editor";
+import { workbenchExamples } from "./examples";
+import type { LiveLexerUpdate } from "./highlightAdapter";
+import { createInitialSourceState } from "./initialSource";
+import { diagnosticsSummaryLabel, renderDiagnostics } from "./panels";
 import {
   type DumpKey,
   type EvaluationState,
@@ -22,12 +27,14 @@ if (!root) {
 }
 
 const appRoot = root;
+let editor: MaodieEditor | undefined;
 
 let state: IdeState = {
-  ...initialSourceState(),
+  ...createInitialSourceState(window.location.search),
   status: "idle",
   activeDump: "ast",
   result: undefined,
+  liveLexer: { status: "loading", diagnostics: [], errorMessage: undefined },
   evalInput: "2",
   evaluation: { status: "idle", result: undefined, errorMessage: undefined },
   errorMessage: undefined,
@@ -37,25 +44,23 @@ let state: IdeState = {
 render();
 
 function render(): void {
+  editor?.destroy();
+  editor = undefined;
   appRoot.innerHTML = renderWorkbench(state);
 
-  appRoot.querySelector<HTMLTextAreaElement>("#source-editor")?.addEventListener("input", (event) => {
-    const source = (event.currentTarget as HTMLTextAreaElement).value;
-    state = {
-      ...state,
-      source,
-      activeExampleId: undefined,
-      status: "idle",
-      result: undefined,
-      evaluation: { status: "idle", result: undefined, errorMessage: undefined },
-      errorMessage: undefined,
-      requestId: state.requestId + 1
-    };
-  });
+  const editorMount = appRoot.querySelector<HTMLDivElement>("#source-editor");
+  if (editorMount) {
+    editor = createMaodieEditor({
+      parent: editorMount,
+      source: state.source,
+      sourcePath,
+      wasmUrl: compilerWasmDisplayUrl(),
+      onLiveLexerUpdate: updateLiveLexer,
+      onSourceChange: updateSourceFromEditor
+    });
+  }
   appRoot.querySelector<HTMLButtonElement>("#compile-button")?.addEventListener("click", () => {
-    state = { ...state, status: "compiling" };
-    render();
-    void runSource();
+    void runCurrentEditorSource();
   });
   appRoot.querySelector<HTMLInputElement>("#eval-input")?.addEventListener("input", (event) => {
     state = {
@@ -73,6 +78,8 @@ function render(): void {
         return;
       }
 
+      const replacedInEditor = Boolean(editor);
+      editor?.replaceSource(example.source);
       state = {
         ...state,
         source: example.source,
@@ -81,7 +88,7 @@ function render(): void {
         result: undefined,
         evaluation: { status: "idle", result: undefined, errorMessage: undefined },
         errorMessage: undefined,
-        requestId: state.requestId + 1
+        requestId: replacedInEditor ? state.requestId : state.requestId + 1
       };
       render();
     });
@@ -94,10 +101,45 @@ function render(): void {
   });
 }
 
-async function runSource(): Promise<void> {
-  const requestId = state.requestId + 1;
+function updateLiveLexer(update: LiveLexerUpdate): void {
   state = {
     ...state,
+    liveLexer: update
+  };
+  refreshDiagnosticsPanel();
+}
+
+function refreshDiagnosticsPanel(): void {
+  const diagnosticsPanel = appRoot.querySelector<HTMLDivElement>("#diagnostics-panel");
+  if (diagnosticsPanel) {
+    diagnosticsPanel.innerHTML = renderDiagnostics(state);
+  }
+
+  const diagnosticsSummary = appRoot.querySelector<HTMLSpanElement>("#diagnostics-summary");
+  if (diagnosticsSummary) {
+    diagnosticsSummary.textContent = diagnosticsSummaryLabel(state);
+  }
+}
+
+function updateSourceFromEditor(source: string): void {
+  state = {
+    ...state,
+    source,
+    activeExampleId: undefined,
+    status: "idle",
+    result: undefined,
+    evaluation: { status: "idle", result: undefined, errorMessage: undefined },
+    errorMessage: undefined,
+    requestId: state.requestId + 1
+  };
+}
+
+async function runCurrentEditorSource(): Promise<void> {
+  const requestId = state.requestId + 1;
+  const source = editor?.readSource() ?? state.source;
+  state = {
+    ...state,
+    source,
     requestId,
     status: "compiling",
     result: undefined,
@@ -105,7 +147,8 @@ async function runSource(): Promise<void> {
     evaluation: { status: "idle", result: undefined, errorMessage: undefined }
   };
 
-  await runCompile(requestId, state.source);
+  render();
+  await runCompile(requestId, source);
 }
 
 async function runCompile(requestId: number, source: string): Promise<void> {
@@ -217,13 +260,4 @@ function chooseActiveDump(activeDump: DumpKey, result: CompileResponse): DumpKey
   }
 
   return dumpKeys.find((key) => result.dumps[key]) ?? activeDump;
-}
-
-function initialSourceState(): Pick<IdeState, "source" | "activeExampleId"> {
-  const sourceParam = new URLSearchParams(window.location.search).get("source");
-  if (sourceParam) {
-    return { source: sourceParam, activeExampleId: undefined };
-  }
-
-  return { source: defaultSource, activeExampleId: defaultExampleId };
 }

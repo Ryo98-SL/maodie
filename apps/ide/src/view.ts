@@ -1,11 +1,11 @@
-import type { Artifact, CompileResponse } from "@maodie/compiler-wasm";
+import type { Artifact } from "@maodie/compiler-wasm";
 import {
   compilerWasmDisplayUrl,
   sourcePath,
   wasmAssetNotes
 } from "./compilerClient";
 import { workbenchExamples, type WorkbenchExample } from "./examples";
-import { renderDiagnostics, renderEvaluation } from "./panels";
+import { diagnosticsSummaryLabel, renderDiagnostics, renderEvaluation } from "./panels";
 import { dumpKeys, type DumpKey, type IdeState } from "./state";
 
 export { dumpKeys } from "./state";
@@ -42,7 +42,7 @@ export function renderWorkbench(state: IdeState): string {
             </div>
             ${renderSelectedExampleDescription(state)}
           </div>
-          <textarea id="source-editor" spellcheck="false" class="min-h-0 flex-1 resize-none overflow-auto bg-neutral-950 p-5 font-mono text-sm leading-7 text-neutral-100 outline-none selection:bg-cyan-500/30">${escapeHtml(state.source)}</textarea>
+          <div id="source-editor" data-editor-mount="monaco" class="min-h-0 flex-1 overflow-hidden bg-neutral-950" role="textbox" aria-label="${sourcePath} editor"></div>
         </section>
         <aside class="grid min-h-0 grid-rows-[minmax(130px,0.7fr)_minmax(160px,0.75fr)_minmax(220px,1fr)] overflow-hidden min-[600px]:grid-rows-[minmax(180px,0.75fr)_minmax(170px,0.6fr)_minmax(260px,1fr)]">
           <section class="flex min-h-0 flex-col overflow-hidden border-b border-neutral-800">
@@ -63,9 +63,9 @@ export function renderWorkbench(state: IdeState): string {
           <section class="flex min-h-0 flex-col overflow-hidden border-b border-neutral-800">
             <div class="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3">
               <h2 class="text-sm font-semibold text-neutral-100">Diagnostics</h2>
-              <span class="text-xs text-neutral-500">${diagnosticCountLabel(state.result)}</span>
+              <span id="diagnostics-summary" class="text-xs text-neutral-500">${diagnosticsSummaryLabel(state)}</span>
             </div>
-            <div class="min-h-0 flex-1 space-y-3 overflow-auto p-4 pb-8 text-sm">
+            <div id="diagnostics-panel" class="min-h-0 flex-1 space-y-5 overflow-auto p-4 pb-8 text-sm">
               ${renderDiagnostics(state)}
             </div>
           </section>
@@ -147,14 +147,6 @@ function renderArtifactSummary(artifacts: readonly Artifact[]): string {
         : `${artifact.filename} ${artifact.content.byteLength} bytes`
     )
     .join(" | ");
-}
-
-function diagnosticCountLabel(result: CompileResponse | undefined): string {
-  if (!result) {
-    return "not run";
-  }
-
-  return `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? "" : "s"}`;
 }
 
 function statusLabel(state: IdeState): string {

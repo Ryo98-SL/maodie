@@ -60,13 +60,24 @@ export async function evaluateMain(
   const wasmModule = await WebAssembly.compile(artifactBytes(wasm));
   let instance: WebAssembly.Instance | undefined;
   const logs: string[] = [];
+  let logChunks: string[] = [];
   instance = await WebAssembly.instantiate(wasmModule, {
     maodie: {
       panic: (pointer: number, length: number) => {
         throw new Error(readGuestString(instance, pointer, length) || "Maodie panic");
       },
       debug_string: (pointer: number, length: number) => {
-        logs.push(readGuestString(instance, pointer, length));
+        logChunks.push(readGuestString(instance, pointer, length));
+      },
+      debug_i32: (value: number) => {
+        logChunks.push(String(value | 0));
+      },
+      debug_bool: (value: number) => {
+        logChunks.push(value === 0 ? "false" : "true");
+      },
+      debug_log_end: () => {
+        logs.push(logChunks.join(""));
+        logChunks = [];
       }
     }
   });
@@ -79,6 +90,9 @@ export async function evaluateMain(
   const raw = main(input);
   if (typeof raw !== "number") {
     throw new Error("main 返回值不是 i32 number。");
+  }
+  if (logChunks.length > 0) {
+    logs.push(logChunks.join(""));
   }
 
   return {

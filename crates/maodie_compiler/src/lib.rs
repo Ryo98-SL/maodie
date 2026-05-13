@@ -6,6 +6,7 @@
 pub mod core;
 /// High-level intermediate representation after name resolution.
 pub mod hir;
+mod log_format;
 /// Mid-level intermediate representation for backend lowering.
 pub mod mir;
 /// Name resolution from syntax AST to HIR.

@@ -8,7 +8,7 @@ The Rust crates module owns the Maodie compiler core workspace.
 
 - `maodie_compiler/`: compiler facade crate and future root of the Rust compile pipeline.
 - `maodie_diagnostics/`: shared source file, byte span, diagnostic code, severity, Chinese CLI rendering, and JSON model.
-- `maodie_syntax/`: source-level syntax utilities, beginning with the `.mao` lexer.
+- `maodie_syntax/`: source-level syntax utilities, including the `.mao` lexer, parser, syntax highlight API, and incremental highlight session.
 - `maodie_wasm_api/`: WebAssembly ABI crate that wraps the compiler facade and emits JSON compile responses.
 - `project.json`: Nx bridge project named `rust` for Cargo build, check, test, lint, format, and WASM build tasks.
 

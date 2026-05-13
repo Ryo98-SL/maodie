@@ -1,4 +1,5 @@
 import type { CompileResponse } from "@maodie/compiler-wasm";
+import type { Diagnostic } from "@maodie/compiler-wasm";
 
 import type { EvaluationResult } from "./compilerClient";
 import type { WorkbenchExampleId } from "./examples";
@@ -6,10 +7,17 @@ import type { WorkbenchExampleId } from "./examples";
 export type CompileStatus = "idle" | "loading" | "compiling" | "ready" | "failed";
 export type DumpKey = "ast" | "hir" | "mir" | "wat" | "types";
 export type EvaluationStatus = "idle" | "running" | "ready" | "failed";
+export type LiveLexerStatus = "loading" | "ready" | "failed";
 
 export interface EvaluationState {
   readonly status: EvaluationStatus;
   readonly result: EvaluationResult | undefined;
+  readonly errorMessage: string | undefined;
+}
+
+export interface LiveLexerState {
+  readonly status: LiveLexerStatus;
+  readonly diagnostics: readonly Diagnostic[];
   readonly errorMessage: string | undefined;
 }
 
@@ -19,6 +27,7 @@ export interface IdeState {
   readonly activeDump: DumpKey;
   readonly activeExampleId: WorkbenchExampleId | undefined;
   readonly result: CompileResponse | undefined;
+  readonly liveLexer: LiveLexerState;
   readonly evalInput: string;
   readonly evaluation: EvaluationState;
   readonly errorMessage: string | undefined;

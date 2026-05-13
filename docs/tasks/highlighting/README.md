@@ -47,7 +47,7 @@
 
 ## 后续任务入口
 
-- Web IDE：从 `web-ide/README.md` 开始，按任务链实现 Rust/WASM 真增量 highlighter、CodeMirror 6 editor shell、decorations 和实时 lexer diagnostics。
+- Web IDE：从 `web-ide/README.md` 开始。历史任务链记录 Rust/WASM 真增量 highlighter、CodeMirror 6 editor shell、decorations 和实时 lexer diagnostics；当前编辑器内核已通过 `web-ide/monaco-editor/README.md` 迁移到 Monaco Editor。
 - VSCode：从 `adapters/vscode.md` 开始，实现 `DocumentSemanticTokensProvider`、diagnostics collection 和 fixture smoke test。
 - JetBrains：从 `adapters/jetbrains.md` 开始，实现 highlight 驱动的 lexer adapter、`SyntaxHighlighter` 映射和 fixture smoke test。
 
@@ -57,7 +57,7 @@
 
 - Rust incremental highlight session。
 - WASM/TS wrapper 和 Web Worker session。
-- CodeMirror 6 editor shell。
+- 历史 CodeMirror 6 editor shell，以及当前 Monaco Editor 重构任务链。
 - highlight decorations 和实时 lexer diagnostics。
 - 浏览器 smoke、性能基准和最终验收闭环。
 

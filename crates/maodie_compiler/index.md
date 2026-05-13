@@ -11,7 +11,7 @@
 
 ## Key Behaviors
 
-The crate exposes the Rust compiler facade, core standard library contract, syntax/resolution/type/MIR stages, and v1 WASM backend. `core.log(message: String)` is declared in the compiler-provided core source and lowered by the WASM backend to the `maodie.debug_string` host import.
+The crate exposes the Rust compiler facade, core standard library contract, syntax/resolution/type/MIR stages, and v1 WASM backend. `core.log(message: String)` is declared in the compiler-provided core source and recognized by type checking/WASM lowering for minimal `{}` interpolation through `maodie` debug chunk imports.
 
 ## Integration Notes
 

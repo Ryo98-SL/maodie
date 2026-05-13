@@ -40,13 +40,16 @@ fn main(value: i32) -> Result<i32, String> {
 
 const fibonacciSource = `module demo
 import core.Result
+import core.log
 
 fn fib(value: i32) -> i32 {
   if value < 2 { value } else { fib(value - 1) + fib(value - 2) }
 }
 
 fn main(value: i32) -> Result<i32, String> {
-  return Result.Ok(fib(value))
+  let result: i32 = fib(value)
+  log("fib({}) = {}", value, result)
+  return Result.Ok(result)
 }
 `;
 

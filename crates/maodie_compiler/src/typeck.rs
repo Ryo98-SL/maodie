@@ -12,6 +12,7 @@ use crate::hir::{
     HirMatchArm, HirPackage, HirPattern, HirStatement, HirStruct, HirTrait, HirTypeRef, HirVariant,
     ItemId, LocalId, ResolvedPath, SymbolId, SymbolKind,
 };
+use crate::log_format::parse_log_format;
 use crate::resolver::{resolve_source, resolve_sources};
 
 /// Type mismatch diagnostic.
@@ -38,6 +39,8 @@ pub const MD_NON_EXHAUSTIVE_MATCH: &str = "MD0410";
 pub const MD_INVALID_PATTERN: &str = "MD0411";
 /// Invalid `?` usage diagnostic.
 pub const MD_INVALID_TRY: &str = "MD0412";
+/// Invalid `core.log` format string diagnostic.
+pub const MD_INVALID_LOG_FORMAT: &str = "MD0413";
 
 /// Stable type identifier inside one type-check result.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1125,6 +1128,9 @@ impl<'package, 'source> TypeSession<'package, 'source> {
         context: &mut BodyContext,
     ) -> TypeId {
         let callee_ty = self.check_expr(callee, context);
+        if self.is_core_log_callee(callee) {
+            return self.check_core_log_call(args, span, context);
+        }
         let TypeKind::Function {
             generics,
             params,
@@ -1185,6 +1191,91 @@ impl<'package, 'source> TypeSession<'package, 'source> {
         }
 
         self.apply_substitution(return_type, &substitutions)
+    }
+
+    fn check_core_log_call(
+        &mut self,
+        args: &[HirExpr],
+        span: TextRange,
+        context: &mut BodyContext,
+    ) -> TypeId {
+        let unit = self.intern(TypeKind::Unit);
+        let Some(message) = args.first() else {
+            self.push(
+                context.source_id,
+                MD_CALL_ARITY,
+                span,
+                "core.log 至少需要 1 个参数",
+                "请传入日志消息或格式字符串",
+            );
+            return unit;
+        };
+
+        let string = self.intern(TypeKind::String);
+        let message_ty = self.check_expr(message, context);
+        self.expect_exact(context.source_id, string, message_ty, expr_span(message));
+
+        if args.len() == 1 {
+            return unit;
+        }
+
+        let format = match message {
+            HirExpr::Literal { text, .. } => parse_log_format(text),
+            _ => None,
+        };
+        let Some(format) = format else {
+            self.push(
+                context.source_id,
+                MD_INVALID_LOG_FORMAT,
+                expr_span(message),
+                "core.log 格式串必须是字符串字面量",
+                "请把第一个参数写成包含 `{}` 占位符的字符串字面量",
+            );
+            for arg in &args[1..] {
+                self.check_log_argument(arg, context);
+            }
+            return unit;
+        };
+
+        let expected = format.placeholder_count();
+        let actual = args.len() - 1;
+        if expected != actual {
+            self.push(
+                context.source_id,
+                MD_CALL_ARITY,
+                span,
+                format!("core.log 格式串需要 {expected} 个插值参数，但传入了 {actual} 个"),
+                "请调整 `{}` 占位符数量或实参数量",
+            );
+        }
+
+        for arg in &args[1..] {
+            self.check_log_argument(arg, context);
+        }
+
+        unit
+    }
+
+    fn check_log_argument(&mut self, arg: &HirExpr, context: &mut BodyContext) {
+        let ty = self.check_expr(arg, context);
+        if self.is_error(ty) {
+            return;
+        }
+        if matches!(
+            self.kind(ty),
+            TypeKind::I32 | TypeKind::Bool | TypeKind::String
+        ) {
+            return;
+        }
+
+        let actual = self.display_type(ty);
+        self.push(
+            context.source_id,
+            MD_TYPE_MISMATCH,
+            expr_span(arg),
+            format!("core.log 插值参数只支持 `i32`、`bool` 或 `String`，实际是 `{actual}`"),
+            "请传入可直接打印的标量值",
+        );
     }
 
     fn path_type(&mut self, resolved: Option<&ResolvedPath>, context: &BodyContext) -> TypeId {
@@ -1396,6 +1487,23 @@ impl<'package, 'source> TypeSession<'package, 'source> {
             .get(symbol.get())
             .and_then(|symbol| symbol.path.last())
             .is_some_and(|last| last == name)
+    }
+
+    fn is_core_log_callee(&self, callee: &HirExpr) -> bool {
+        let HirExpr::Path {
+            resolved: Some(ResolvedPath::Symbol(symbol)),
+            ..
+        } = callee
+        else {
+            return false;
+        };
+        self.package
+            .symbols
+            .get(symbol.get())
+            .is_some_and(|symbol| {
+                symbol.kind == SymbolKind::Function
+                    && symbol.path.as_slice() == ["core".to_owned(), "log".to_owned()]
+            })
     }
 
     fn expect_exact(
@@ -1709,9 +1817,11 @@ impl TypeDumper {
 mod tests {
     use maodie_diagnostics::{SourceFile, SourceId};
 
+    use crate::core::check_source_with_core;
+
     use super::{
-        check_source, MD_IMMUTABLE_ASSIGNMENT, MD_INVALID_TRY, MD_MISSING_TRAIT_METHOD,
-        MD_NON_EXHAUSTIVE_MATCH, MD_TYPE_MISMATCH,
+        check_source, MD_CALL_ARITY, MD_IMMUTABLE_ASSIGNMENT, MD_INVALID_LOG_FORMAT,
+        MD_INVALID_TRY, MD_MISSING_TRAIT_METHOD, MD_NON_EXHAUSTIVE_MATCH, MD_TYPE_MISMATCH,
     };
 
     #[test]
@@ -1908,5 +2018,67 @@ fn main(value: i32) -> i32 {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code.as_str() == MD_INVALID_TRY));
+    }
+
+    #[test]
+    fn accepts_core_log_format_arguments() {
+        let source = SourceFile::new(
+            SourceId::new(1),
+            "log_format.mao",
+            "\
+module demo
+import core.Result
+import core.log
+fn label() -> String { return \"ok\" }
+fn main(value: i32) -> Result<i32, String> {
+  let enabled: bool = true
+  let message: String = label()
+  log(\"value is {} {} {}\", value, enabled, message)
+  return Result.Ok(value)
+}
+",
+        );
+
+        let result = check_source_with_core(&source);
+
+        assert!(result.diagnostics.is_empty(), "{:#?}", result.diagnostics);
+    }
+
+    #[test]
+    fn reports_core_log_format_errors() {
+        let source = SourceFile::new(
+            SourceId::new(1),
+            "log_format_bad.mao",
+            "\
+module demo
+import core.Result
+import core.log
+struct Point {}
+fn bad(point: Point) {
+  log(\"value {}\", point)
+}
+fn main(value: i32) -> Result<i32, String> {
+  let format: String = \"value {}\"
+  log(format, value)
+  log(\"value {} {}\", value)
+  return Result.Ok(value)
+}
+",
+        );
+
+        let result = check_source_with_core(&source);
+
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.as_str() == MD_INVALID_LOG_FORMAT));
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.as_str() == MD_CALL_ARITY));
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.as_str() == MD_TYPE_MISMATCH));
     }
 }

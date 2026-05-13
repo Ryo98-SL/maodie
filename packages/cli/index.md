@@ -18,7 +18,7 @@
 
 ## Runtime Behaviors
 
-The CLI reads a source file, compiles it through `@maodie/compiler-wasm`, prints diagnostics to stderr, and writes the requested output to stdout or a file. The `run` command instantiates the emitted WASM, calls `main(i32)`, and writes `core.log` messages captured from `maodie.debug_string` to stdout.
+The CLI reads a source file, compiles it through `@maodie/compiler-wasm`, prints diagnostics to stderr, and writes the requested output to stdout or a file. The `run` command instantiates the emitted WASM, calls `main(i32)`, collects `core.log` debug chunks from the `maodie` imports, and writes each flushed log line to stdout.
 
 The acceptance suite reads `examples/v1_acceptance.mao` and `examples/v1_error.mao` directly, keeping CLI behavior tied to the public examples instead of embedded test-only source strings.
 

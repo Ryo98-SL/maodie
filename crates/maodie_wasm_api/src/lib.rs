@@ -9,9 +9,13 @@ use maodie_compiler::{
     core::check_source_with_core,
     diagnostics::{
         Diagnostic as CompilerDiagnostic, DiagnosticSeverity, DiagnosticSpan, SourceFile, SourceId,
+        TextRange,
     },
     mir::lower_package,
-    syntax::{highlight_source, parse_source, HighlightKind as SyntaxHighlightKind},
+    syntax::{
+        highlight_source, parse_source, HighlightEdit, HighlightKind as SyntaxHighlightKind,
+        IncrementalHighlightError, IncrementalHighlightSession, IncrementalHighlightUpdate,
+    },
     wasm::compile_mir_to_wasm,
 };
 use serde::{Deserialize, Serialize};
@@ -39,6 +43,35 @@ pub struct HighlightOptions {
     pub source_path: Option<String>,
 }
 
+/// Initial options accepted when creating an incremental highlight session.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HighlightSessionOptions {
+    /// Display path for diagnostics.
+    pub source_path: Option<String>,
+    /// Caller-owned editor version mirrored back in the response.
+    pub editor_version: Option<u64>,
+}
+
+/// Reset options accepted by an existing incremental highlight session.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HighlightSessionResetOptions {
+    /// Optional new display path for diagnostics. Omitted values preserve the session path.
+    pub source_path: Option<String>,
+    /// Caller-owned editor version mirrored back in the response.
+    pub editor_version: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct HighlightSessionUpdateRequest {
+    editor_version: u64,
+    session_version: u64,
+    range: ApiTextRange,
+    replacement: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompileResponse {
@@ -54,6 +87,20 @@ struct HighlightResponse {
     ok: bool,
     tokens: Vec<ApiHighlightToken>,
     diagnostics: Vec<ApiDiagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HighlightSessionResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_handle: Option<usize>,
+    editor_version: u64,
+    session_version: u64,
+    changed_range: ApiTextRange,
+    tokens: Vec<ApiHighlightToken>,
+    diagnostics: Vec<ApiDiagnostic>,
+    full_rehighlight: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -77,7 +124,7 @@ enum ApiHighlightKind {
     Error,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiTextRange {
     start: usize,
@@ -128,6 +175,11 @@ struct ApiPosition {
 
 pub struct ResponseBuffer {
     bytes: Vec<u8>,
+}
+
+pub struct HighlightSessionHandle {
+    source_path: String,
+    session: IncrementalHighlightSession,
 }
 
 /// Allocates a byte buffer inside WASM memory.
@@ -197,6 +249,121 @@ pub extern "C" fn maodie_highlight(
     let bytes = serialize_response(&response, "highlight response", highlight_error_response);
 
     Box::into_raw(Box::new(ResponseBuffer { bytes }))
+}
+
+/// Creates an incremental highlight session and returns a response containing its handle.
+///
+/// The handle is owned by the caller until passed to [`maodie_highlight_session_dispose`].
+#[no_mangle]
+pub extern "C" fn maodie_highlight_session_create(
+    source_pointer: *const u8,
+    source_len: usize,
+    options_pointer: *const u8,
+    options_len: usize,
+) -> *mut ResponseBuffer {
+    let source = read_utf8(source_pointer, source_len);
+    let options = read_json_options(options_pointer, options_len, "highlight session options");
+    let response = match (source, options) {
+        (Ok(source), Ok(options)) => create_highlight_session_response(&source, options),
+        (Err(message), _) | (_, Err(message)) => {
+            highlight_session_error_response(message, None, 0, 0)
+        }
+    };
+    let bytes = serialize_response(&response, "highlight session create response", |message| {
+        highlight_session_error_response(message, None, 0, 0)
+    });
+
+    Box::into_raw(Box::new(ResponseBuffer { bytes }))
+}
+
+/// Applies a source edit to an incremental highlight session.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[no_mangle]
+pub extern "C" fn maodie_highlight_session_update(
+    session_handle: *mut HighlightSessionHandle,
+    request_pointer: *const u8,
+    request_len: usize,
+) -> *mut ResponseBuffer {
+    let request = read_json_request::<HighlightSessionUpdateRequest>(
+        request_pointer,
+        request_len,
+        "highlight session update request",
+    );
+    let response = match (session_handle.is_null(), request) {
+        (true, Ok(request)) => highlight_session_error_response(
+            "highlight session handle is null",
+            None,
+            request.editor_version,
+            0,
+        ),
+        (true, Err(message)) => highlight_session_error_response(message, None, 0, 0),
+        (false, Ok(request)) => unsafe {
+            update_highlight_session_for_json(&mut *session_handle, request)
+        },
+        (false, Err(message)) => unsafe {
+            let session = &*session_handle;
+            highlight_session_error_response(message, None, 0, session.session.version())
+        },
+    };
+    let bytes = serialize_response(&response, "highlight session update response", |message| {
+        highlight_session_error_response(message, None, 0, 0)
+    });
+
+    Box::into_raw(Box::new(ResponseBuffer { bytes }))
+}
+
+/// Replaces the source snapshot for an incremental highlight session.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[no_mangle]
+pub extern "C" fn maodie_highlight_session_reset(
+    session_handle: *mut HighlightSessionHandle,
+    source_pointer: *const u8,
+    source_len: usize,
+    options_pointer: *const u8,
+    options_len: usize,
+) -> *mut ResponseBuffer {
+    let source = read_utf8(source_pointer, source_len);
+    let options = read_json_options::<HighlightSessionResetOptions>(
+        options_pointer,
+        options_len,
+        "highlight session reset options",
+    );
+    let response = match (session_handle.is_null(), source, options) {
+        (true, Ok(_), Ok(options)) => highlight_session_error_response(
+            "highlight session handle is null",
+            None,
+            options.editor_version.unwrap_or(0),
+            0,
+        ),
+        (true, Err(message), _) | (true, _, Err(message)) => {
+            highlight_session_error_response(message, None, 0, 0)
+        }
+        (false, Ok(source), Ok(options)) => unsafe {
+            reset_highlight_session_for_json(&mut *session_handle, &source, options)
+        },
+        (false, Err(message), _) | (false, _, Err(message)) => unsafe {
+            let session = &*session_handle;
+            highlight_session_error_response(message, None, 0, session.session.version())
+        },
+    };
+    let bytes = serialize_response(&response, "highlight session reset response", |message| {
+        highlight_session_error_response(message, None, 0, 0)
+    });
+
+    Box::into_raw(Box::new(ResponseBuffer { bytes }))
+}
+
+/// Disposes an incremental highlight session handle.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[no_mangle]
+pub extern "C" fn maodie_highlight_session_dispose(session_handle: *mut HighlightSessionHandle) {
+    if session_handle.is_null() {
+        return;
+    }
+
+    unsafe {
+        drop(Box::from_raw(session_handle));
+    }
 }
 
 /// Returns the JSON byte length stored in a response handle.
@@ -335,6 +502,133 @@ fn highlight_source_for_json(source_text: &str, options: HighlightOptions) -> Hi
     }
 }
 
+fn create_highlight_session_response(
+    source_text: &str,
+    options: HighlightSessionOptions,
+) -> HighlightSessionResponse {
+    let source_path = options.source_path.unwrap_or_else(|| "<memory>".to_owned());
+    let source = SourceFile::new(SourceId::new(1), &source_path, source_text);
+    let session = IncrementalHighlightSession::new(source);
+    let response = highlight_session_snapshot_response(
+        None,
+        options.editor_version.unwrap_or(0),
+        session.version(),
+        ApiTextRange {
+            start: 0,
+            end: session.source().len_bytes(),
+        },
+        session.tokens(),
+        session.diagnostics(),
+        true,
+    );
+    let handle = Box::into_raw(Box::new(HighlightSessionHandle {
+        source_path,
+        session,
+    })) as usize;
+
+    HighlightSessionResponse {
+        session_handle: Some(handle),
+        ..response
+    }
+}
+
+fn update_highlight_session_for_json(
+    handle: &mut HighlightSessionHandle,
+    request: HighlightSessionUpdateRequest,
+) -> HighlightSessionResponse {
+    let current_version = handle.session.version();
+    if request.session_version != current_version {
+        return highlight_session_error_response(
+            format!(
+                "highlight session version mismatch: request version {}, current version {}",
+                request.session_version, current_version
+            ),
+            None,
+            request.editor_version,
+            current_version,
+        );
+    }
+
+    let edit = HighlightEdit {
+        range: TextRange::new(request.range.start, request.range.end),
+        replacement: request.replacement,
+    };
+
+    match handle.session.update(edit) {
+        Ok(update) => highlight_session_update_response(None, request.editor_version, update),
+        Err(IncrementalHighlightError::InvalidEditRange { range, source_len }) => {
+            highlight_session_error_response(
+                format!(
+                    "invalid highlight edit range {}..{} for source length {}",
+                    range.start, range.end, source_len
+                ),
+                None,
+                request.editor_version,
+                handle.session.version(),
+            )
+        }
+    }
+}
+
+fn reset_highlight_session_for_json(
+    handle: &mut HighlightSessionHandle,
+    source_text: &str,
+    options: HighlightSessionResetOptions,
+) -> HighlightSessionResponse {
+    if let Some(source_path) = options.source_path {
+        handle.source_path = source_path;
+    }
+
+    let source = SourceFile::new(SourceId::new(1), &handle.source_path, source_text);
+    let update = handle.session.reset(source);
+    highlight_session_update_response(None, options.editor_version.unwrap_or(0), update)
+}
+
+fn highlight_session_update_response(
+    session_handle: Option<usize>,
+    editor_version: u64,
+    update: IncrementalHighlightUpdate,
+) -> HighlightSessionResponse {
+    highlight_session_snapshot_response(
+        session_handle,
+        editor_version,
+        update.version,
+        ApiTextRange::from(update.changed_range),
+        &update.tokens,
+        &update.diagnostics,
+        update.full_rehighlight,
+    )
+}
+
+fn highlight_session_snapshot_response(
+    session_handle: Option<usize>,
+    editor_version: u64,
+    session_version: u64,
+    changed_range: ApiTextRange,
+    tokens: &[maodie_compiler::syntax::HighlightToken],
+    diagnostics: &[CompilerDiagnostic],
+    full_rehighlight: bool,
+) -> HighlightSessionResponse {
+    let has_error = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+
+    HighlightSessionResponse {
+        ok: !has_error,
+        session_handle,
+        editor_version,
+        session_version,
+        changed_range,
+        tokens: tokens
+            .iter()
+            .cloned()
+            .map(ApiHighlightToken::from)
+            .collect(),
+        diagnostics: diagnostics.iter().map(ApiDiagnostic::from).collect(),
+        full_rehighlight,
+    }
+}
+
 fn read_utf8(pointer: *const u8, len: usize) -> Result<String, String> {
     let bytes = read_bytes(pointer, len)?;
     std::str::from_utf8(bytes)
@@ -352,6 +646,14 @@ where
 
     let bytes = read_bytes(pointer, len)?;
     serde_json::from_slice(bytes).map_err(|error| format!("{label} are invalid JSON: {error}"))
+}
+
+fn read_json_request<T>(pointer: *const u8, len: usize, label: &str) -> Result<T, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let bytes = read_bytes(pointer, len)?;
+    serde_json::from_slice(bytes).map_err(|error| format!("{label} is invalid JSON: {error}"))
 }
 
 fn read_bytes<'bytes>(pointer: *const u8, len: usize) -> Result<&'bytes [u8], String> {
@@ -405,6 +707,30 @@ fn highlight_error_response(message: impl Into<String>) -> HighlightResponse {
     }
 }
 
+fn highlight_session_error_response(
+    message: impl Into<String>,
+    session_handle: Option<usize>,
+    editor_version: u64,
+    session_version: u64,
+) -> HighlightSessionResponse {
+    HighlightSessionResponse {
+        ok: false,
+        session_handle,
+        editor_version,
+        session_version,
+        changed_range: ApiTextRange { start: 0, end: 0 },
+        tokens: Vec::new(),
+        diagnostics: vec![ApiDiagnostic {
+            code: API_ERROR_CODE.to_owned(),
+            severity: "error",
+            message: message.into(),
+            span: None,
+            notes: Vec::new(),
+        }],
+        full_rehighlight: false,
+    }
+}
+
 impl From<maodie_compiler::syntax::HighlightToken> for ApiHighlightToken {
     fn from(token: maodie_compiler::syntax::HighlightToken) -> Self {
         Self {
@@ -413,6 +739,15 @@ impl From<maodie_compiler::syntax::HighlightToken> for ApiHighlightToken {
                 start: token.range.start,
                 end: token.range.end,
             },
+        }
+    }
+}
+
+impl From<TextRange> for ApiTextRange {
+    fn from(range: TextRange) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
         }
     }
 }
@@ -467,8 +802,10 @@ impl From<&DiagnosticSpan> for ApiDiagnosticSpan {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_source, highlight_source_for_json, ApiHighlightKind, CompileOptions,
-        HighlightOptions,
+        compile_source, create_highlight_session_response, highlight_source_for_json,
+        reset_highlight_session_for_json, update_highlight_session_for_json, ApiHighlightKind,
+        ApiTextRange, CompileOptions, HighlightOptions, HighlightSessionHandle,
+        HighlightSessionOptions, HighlightSessionResetOptions, HighlightSessionUpdateRequest,
     };
 
     #[test]
@@ -571,5 +908,102 @@ fn main() -> bool {
             .any(|token| token.kind == ApiHighlightKind::Error));
         assert_eq!(response.diagnostics[0].severity, "error");
         assert_eq!(response.diagnostics[0].code, "MD0101");
+    }
+
+    #[test]
+    fn creates_updates_and_resets_highlight_session_contract() {
+        let create = create_highlight_session_response(
+            "let x = 1\n",
+            HighlightSessionOptions {
+                source_path: Some("session.mao".to_owned()),
+                editor_version: Some(7),
+            },
+        );
+
+        assert!(create.ok, "{:#?}", create.diagnostics);
+        assert_eq!(create.editor_version, 7);
+        assert_eq!(create.session_version, 0);
+        assert_eq!(create.changed_range, ApiTextRange { start: 0, end: 10 });
+        assert!(create.full_rehighlight);
+        assert!(create.session_handle.is_some());
+
+        let mut handle = unsafe {
+            Box::from_raw(
+                create.session_handle.expect("session handle") as *mut HighlightSessionHandle
+            )
+        };
+        let update = update_highlight_session_for_json(
+            &mut handle,
+            HighlightSessionUpdateRequest {
+                editor_version: 8,
+                session_version: 0,
+                range: ApiTextRange { start: 8, end: 9 },
+                replacement: "2".to_owned(),
+            },
+        );
+
+        assert!(update.ok, "{:#?}", update.diagnostics);
+        assert_eq!(update.editor_version, 8);
+        assert_eq!(update.session_version, 1);
+        assert!(!update.full_rehighlight);
+        assert!(update
+            .tokens
+            .iter()
+            .any(|token| token.kind == ApiHighlightKind::Number));
+
+        let reset = reset_highlight_session_for_json(
+            &mut handle,
+            "let y = @\n",
+            HighlightSessionResetOptions {
+                source_path: Some("reset.mao".to_owned()),
+                editor_version: Some(9),
+            },
+        );
+
+        assert!(!reset.ok);
+        assert_eq!(reset.editor_version, 9);
+        assert_eq!(reset.session_version, 2);
+        assert!(reset.full_rehighlight);
+        assert_eq!(reset.diagnostics[0].code, "MD0101");
+    }
+
+    #[test]
+    fn rejects_stale_highlight_session_update_versions() {
+        let create = create_highlight_session_response(
+            "let x = 1\n",
+            HighlightSessionOptions {
+                source_path: None,
+                editor_version: Some(1),
+            },
+        );
+        let mut handle = unsafe {
+            Box::from_raw(
+                create.session_handle.expect("session handle") as *mut HighlightSessionHandle
+            )
+        };
+        let first = update_highlight_session_for_json(
+            &mut handle,
+            HighlightSessionUpdateRequest {
+                editor_version: 2,
+                session_version: 0,
+                range: ApiTextRange { start: 8, end: 9 },
+                replacement: "2".to_owned(),
+            },
+        );
+        let stale = update_highlight_session_for_json(
+            &mut handle,
+            HighlightSessionUpdateRequest {
+                editor_version: 3,
+                session_version: 0,
+                range: ApiTextRange { start: 8, end: 9 },
+                replacement: "3".to_owned(),
+            },
+        );
+
+        assert!(first.ok);
+        assert!(!stale.ok);
+        assert_eq!(stale.session_version, 1);
+        assert_eq!(stale.diagnostics[0].code, "MD9000");
+        assert!(stale.diagnostics[0].message.contains("version mismatch"));
     }
 }

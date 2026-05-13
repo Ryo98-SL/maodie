@@ -1,3 +1,5 @@
+import type { ByteRange } from "./ranges.js";
+
 export type CompileTarget = "wasm";
 export type DiagnosticSeverity = "error" | "warning" | "info";
 export type ArtifactKind = "wat" | "wasm";
@@ -77,6 +79,28 @@ export interface HighlightResponse {
   readonly diagnostics: readonly Diagnostic[];
 }
 
+export interface HighlightSessionOptions extends HighlightOptions {
+  readonly editorVersion?: number;
+}
+
+export interface HighlightSessionResetOptions extends HighlightOptions {
+  readonly editorVersion: number;
+}
+
+export interface HighlightSessionUpdate {
+  readonly editorVersion: number;
+  readonly sessionVersion?: number;
+  readonly range: ByteRange;
+  readonly replacement: string;
+}
+
+export interface HighlightSessionResponse extends HighlightResponse {
+  readonly editorVersion: number;
+  readonly sessionVersion: number;
+  readonly changedRange: ByteRange;
+  readonly fullRehighlight: boolean;
+}
+
 export interface CompilerWasmLoaderOptions {
   readonly wasmUrl?: string | URL;
   readonly wasmBytes?: ArrayBuffer | Uint8Array;
@@ -98,6 +122,10 @@ interface RawCompileResponse {
   readonly dumps: Readonly<Record<string, string>>;
 }
 
+interface RawHighlightSessionResponse extends HighlightSessionResponse {
+  readonly sessionHandle?: number | null;
+}
+
 interface CompilerWasmExports extends WebAssembly.Exports {
   readonly memory: WebAssembly.Memory;
   readonly maodie_alloc: (len: number) => number;
@@ -114,6 +142,25 @@ interface CompilerWasmExports extends WebAssembly.Exports {
     optionsPointer: number,
     optionsLen: number
   ) => number;
+  readonly maodie_highlight_session_create: (
+    sourcePointer: number,
+    sourceLen: number,
+    optionsPointer: number,
+    optionsLen: number
+  ) => number;
+  readonly maodie_highlight_session_update: (
+    sessionHandle: number,
+    requestPointer: number,
+    requestLen: number
+  ) => number;
+  readonly maodie_highlight_session_reset: (
+    sessionHandle: number,
+    sourcePointer: number,
+    sourceLen: number,
+    optionsPointer: number,
+    optionsLen: number
+  ) => number;
+  readonly maodie_highlight_session_dispose: (sessionHandle: number) => void;
   readonly maodie_response_len: (responsePointer: number) => number;
   readonly maodie_response_bytes: (responsePointer: number) => number;
   readonly maodie_free_response: (responsePointer: number) => void;
@@ -176,6 +223,30 @@ export class MaodieCompilerWasm {
     return this.#callJsonApi<HighlightResponse>(source, options, this.#exports.maodie_highlight);
   }
 
+  createHighlightSession(
+    source: string,
+    options: HighlightSessionOptions = {}
+  ): MaodieHighlightSession {
+    const raw = this.#callJsonApi<RawHighlightSessionResponse>(
+      source,
+      options,
+      this.#exports.maodie_highlight_session_create
+    );
+    const sessionHandle = raw.sessionHandle;
+
+    if (
+      typeof sessionHandle !== "number" ||
+      !Number.isSafeInteger(sessionHandle) ||
+      sessionHandle <= 0
+    ) {
+      throw new Error(
+        raw.diagnostics[0]?.message ?? "Maodie highlight session create response did not include a handle."
+      );
+    }
+
+    return new MaodieHighlightSession(this.#exports, sessionHandle, toHighlightSessionResponse(raw));
+  }
+
   #callJsonApi<TResponse>(
     source: string,
     options: object,
@@ -224,6 +295,101 @@ export class MaodieCompilerWasm {
       responseLen
     );
     return JSON.parse(textDecoder.decode(responseBytes)) as TResponse;
+  }
+}
+
+export class MaodieHighlightSession {
+  readonly #exports: CompilerWasmExports;
+  #handle: number;
+  #current: HighlightSessionResponse;
+
+  constructor(
+    exports: WebAssembly.Exports,
+    handle: number,
+    initialResponse: HighlightSessionResponse
+  ) {
+    this.#exports = exports as CompilerWasmExports;
+    this.#handle = handle;
+    this.#current = initialResponse;
+  }
+
+  get disposed(): boolean {
+    return this.#handle === 0;
+  }
+
+  get current(): HighlightSessionResponse {
+    return this.#current;
+  }
+
+  get editorVersion(): number {
+    return this.#current.editorVersion;
+  }
+
+  get sessionVersion(): number {
+    return this.#current.sessionVersion;
+  }
+
+  update(edit: HighlightSessionUpdate): HighlightSessionResponse {
+    this.#assertActive("update");
+    const raw = callJsonRequestApi<RawHighlightSessionResponse>(
+      this.#exports,
+      {
+        editorVersion: edit.editorVersion,
+        sessionVersion: edit.sessionVersion ?? this.#current.sessionVersion,
+        range: edit.range,
+        replacement: edit.replacement
+      },
+      (requestPointer, requestLen) =>
+        this.#exports.maodie_highlight_session_update(this.#handle, requestPointer, requestLen)
+    );
+    const response = toHighlightSessionResponse(raw);
+
+    this.#acceptResponse(response);
+
+    return response;
+  }
+
+  reset(source: string, options: HighlightSessionResetOptions): HighlightSessionResponse {
+    this.#assertActive("reset");
+    const raw = callSourceOptionsJsonApi<RawHighlightSessionResponse>(
+      this.#exports,
+      source,
+      options,
+      (sourcePointer, sourceLen, optionsPointer, optionsLen) =>
+        this.#exports.maodie_highlight_session_reset(
+          this.#handle,
+          sourcePointer,
+          sourceLen,
+          optionsPointer,
+          optionsLen
+        )
+    );
+    const response = toHighlightSessionResponse(raw);
+
+    this.#acceptResponse(response);
+
+    return response;
+  }
+
+  dispose(): void {
+    if (this.#handle === 0) {
+      return;
+    }
+
+    this.#exports.maodie_highlight_session_dispose(this.#handle);
+    this.#handle = 0;
+  }
+
+  #assertActive(action: string): void {
+    if (this.#handle === 0) {
+      throw new Error(`Cannot ${action} a disposed Maodie highlight session.`);
+    }
+  }
+
+  #acceptResponse(response: HighlightSessionResponse): void {
+    if (response.ok || response.sessionVersion > this.#current.sessionVersion) {
+      this.#current = response;
+    }
   }
 }
 
@@ -295,6 +461,85 @@ function splitHighlightOptions(
   return { apiOptions, loaderOptions };
 }
 
+function callSourceOptionsJsonApi<TResponse>(
+  exports: CompilerWasmExports,
+  source: string,
+  options: object,
+  call: (
+    sourcePointer: number,
+    sourceLen: number,
+    optionsPointer: number,
+    optionsLen: number
+  ) => number
+): TResponse {
+  const sourceBytes = textEncoder.encode(source);
+  const optionsBytes = textEncoder.encode(JSON.stringify(options));
+  const sourcePointer = copyIntoWasm(exports, sourceBytes);
+  const optionsPointer = copyIntoWasm(exports, optionsBytes);
+  let responsePointer = 0;
+
+  try {
+    responsePointer = call(
+      sourcePointer,
+      sourceBytes.byteLength,
+      optionsPointer,
+      optionsBytes.byteLength
+    );
+    return readResponse(exports, responsePointer);
+  } finally {
+    exports.maodie_dealloc(sourcePointer, sourceBytes.byteLength);
+    exports.maodie_dealloc(optionsPointer, optionsBytes.byteLength);
+    if (responsePointer !== 0) {
+      exports.maodie_free_response(responsePointer);
+    }
+  }
+}
+
+function callJsonRequestApi<TResponse>(
+  exports: CompilerWasmExports,
+  request: object,
+  call: (requestPointer: number, requestLen: number) => number
+): TResponse {
+  const requestBytes = textEncoder.encode(JSON.stringify(request));
+  const requestPointer = copyIntoWasm(exports, requestBytes);
+  let responsePointer = 0;
+
+  try {
+    responsePointer = call(requestPointer, requestBytes.byteLength);
+    return readResponse(exports, responsePointer);
+  } finally {
+    exports.maodie_dealloc(requestPointer, requestBytes.byteLength);
+    if (responsePointer !== 0) {
+      exports.maodie_free_response(responsePointer);
+    }
+  }
+}
+
+function copyIntoWasm(exports: CompilerWasmExports, bytes: Uint8Array): number {
+  const pointer = exports.maodie_alloc(bytes.byteLength);
+  new Uint8Array(exports.memory.buffer, pointer, bytes.byteLength).set(bytes);
+  return pointer;
+}
+
+function readResponse<TResponse>(exports: CompilerWasmExports, responsePointer: number): TResponse {
+  const responseLen = exports.maodie_response_len(responsePointer);
+  const responseBytesPointer = exports.maodie_response_bytes(responsePointer);
+  const responseBytes = new Uint8Array(exports.memory.buffer, responseBytesPointer, responseLen);
+  return JSON.parse(textDecoder.decode(responseBytes)) as TResponse;
+}
+
+function toHighlightSessionResponse(raw: RawHighlightSessionResponse): HighlightSessionResponse {
+  return {
+    ok: raw.ok,
+    editorVersion: raw.editorVersion,
+    sessionVersion: raw.sessionVersion,
+    changedRange: raw.changedRange,
+    tokens: raw.tokens,
+    diagnostics: raw.diagnostics,
+    fullRehighlight: raw.fullRehighlight
+  };
+}
+
 function assertCompilerExports(exports: WebAssembly.Exports): CompilerWasmExports {
   const required = [
     "memory",
@@ -302,6 +547,10 @@ function assertCompilerExports(exports: WebAssembly.Exports): CompilerWasmExport
     "maodie_dealloc",
     "maodie_compile",
     "maodie_highlight",
+    "maodie_highlight_session_create",
+    "maodie_highlight_session_update",
+    "maodie_highlight_session_reset",
+    "maodie_highlight_session_dispose",
     "maodie_response_len",
     "maodie_response_bytes",
     "maodie_free_response"
@@ -322,6 +571,9 @@ function createImports(imports: WebAssembly.Imports = {}): WebAssembly.Imports {
     maodie: {
       panic: () => undefined,
       debug_string: () => undefined,
+      debug_i32: () => undefined,
+      debug_bool: () => undefined,
+      debug_log_end: () => undefined,
       ...imports.maodie
     }
   };

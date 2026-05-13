@@ -9,9 +9,11 @@ use std::fmt;
 use std::fmt::Write as _;
 
 use crate::core::{
-    WASM_HOST_MODULE, WASM_IMPORT_DEBUG_STRING, WASM_IMPORT_PANIC, WASM_MEMORY_EXPORT,
+    WASM_HOST_MODULE, WASM_IMPORT_DEBUG_BOOL, WASM_IMPORT_DEBUG_I32, WASM_IMPORT_DEBUG_LOG_END,
+    WASM_IMPORT_DEBUG_STRING, WASM_IMPORT_PANIC, WASM_MEMORY_EXPORT,
 };
 use crate::hir::{SymbolId, SymbolKind};
+use crate::log_format::{parse_log_format, string_literal_value, LogFormat};
 use crate::mir::{
     BasicBlock, BasicBlockId, MirBranchPattern, MirConstant, MirFunction, MirLocalId, MirLocalKind,
     MirOperand, MirPackage, MirPlace, MirRvalue, MirStatement, MirTerminator, MirTypeKind,
@@ -22,11 +24,36 @@ pub const WAT_DUMP_NAME: &str = "module.wat";
 /// Stable WASM binary artifact name.
 pub const WASM_BINARY_NAME: &str = "module.wasm";
 
-const IMPORT_COUNT: u32 = 2;
+const IMPORT_COUNT: u32 = 5;
 const DEBUG_STRING_IMPORT_INDEX: u32 = 1;
+const DEBUG_I32_IMPORT_INDEX: u32 = 2;
+const DEBUG_BOOL_IMPORT_INDEX: u32 = 3;
+const DEBUG_LOG_END_IMPORT_INDEX: u32 = 4;
 const VARIANT_TAG_MASK: i32 = 0xff;
 const VARIANT_PAYLOAD_SHIFT: i32 = 8;
 const STRING_DATA_BASE: u32 = 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WasmValueType {
+    I32,
+    I64,
+}
+
+impl WasmValueType {
+    fn wat(self) -> &'static str {
+        match self {
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+        }
+    }
+
+    fn binary(self) -> u8 {
+        match self {
+            Self::I32 => 0x7f,
+            Self::I64 => 0x7e,
+        }
+    }
+}
 
 /// Structured output from the MIR-to-WASM backend.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,7 +122,7 @@ impl WasmBackend {
     #[must_use]
     pub fn compile(&self, package: &MirPackage) -> WasmArtifacts {
         let mut diagnostics = vec![WasmDiagnostic::new(
-            "v1 WASM layout maps i32, bool, String handles, Slice handles, and enum values to i32; managed allocation and GC are not emitted.",
+            "v1 WASM layout maps i32, bool, Slice handles, and enum values to i32; direct String values use packed i64 ptr/len handles; managed allocation and GC are not emitted.",
         )];
         let layout = Layout::new(package);
         let strings = StringTable::new(package);
@@ -230,7 +257,11 @@ impl StringTable {
         let Some(value) = string_literal_value(text) else {
             return;
         };
-        if self.offsets.contains_key(&value) {
+        self.intern_text(&value);
+    }
+
+    fn intern_text(&mut self, value: &str) {
+        if self.offsets.contains_key(value) {
             return;
         }
         let used = self
@@ -240,18 +271,28 @@ impl StringTable {
             .sum::<usize>();
         let offset =
             STRING_DATA_BASE + u32::try_from(used).expect("string table size must fit in u32");
-        self.offsets.insert(value.clone(), offset);
+        self.offsets.insert(value.to_owned(), offset);
         self.entries.push(StringEntry {
             bytes: value.as_bytes().to_vec(),
-            text: value,
+            text: value.to_owned(),
             offset,
         });
     }
 
-    fn offset_for_literal(&self, text: &str) -> u32 {
+    fn handle_for_literal(&self, text: &str) -> i64 {
         string_literal_value(text)
-            .and_then(|value| self.offsets.get(&value).copied())
+            .map(|value| self.handle_for_text(&value))
             .unwrap_or(0)
+    }
+
+    fn handle_for_text(&self, text: &str) -> i64 {
+        let offset = u64::from(self.offset_for_text(text).unwrap_or(0));
+        let len = u64::try_from(text.len()).expect("string length must fit in u64");
+        i64::try_from((len << 32) | offset).expect("string handle must fit in i64")
+    }
+
+    fn offset_for_text(&self, text: &str) -> Option<u32> {
+        self.offsets.get(text).copied()
     }
 
     fn visit_statement(&mut self, statement: &MirStatement) {
@@ -290,6 +331,13 @@ impl StringTable {
                 self.visit_operand(operand);
             }
             MirRvalue::Call { callee, args } => {
+                if let Some(MirOperand::Const(MirConstant::Literal(text))) = args.first() {
+                    if let Some(format) = parse_log_format(text) {
+                        for segment in &format.segments {
+                            self.intern_text(segment);
+                        }
+                    }
+                }
                 self.visit_operand(callee);
                 for arg in args {
                     self.visit_operand(arg);
@@ -321,6 +369,7 @@ struct FunctionLayout {
     bb: u32,
     done: u32,
     matched: u32,
+    string_scratch: u32,
 }
 
 impl FunctionLayout {
@@ -343,6 +392,7 @@ impl FunctionLayout {
         let bb = next + 1;
         let done = next + 2;
         let matched = next + 3;
+        let string_scratch = next + 4;
 
         Self {
             locals,
@@ -350,6 +400,7 @@ impl FunctionLayout {
             bb,
             done,
             matched,
+            string_scratch,
         }
     }
 
@@ -360,13 +411,21 @@ impl FunctionLayout {
             .expect("MIR local must have a WASM local")
     }
 
-    fn declared_local_count(function: &MirFunction) -> u32 {
-        let mir_non_params = function
+    fn declared_local_groups(function: &MirFunction, package: &MirPackage) -> Vec<WasmValueType> {
+        let mut locals = function
             .locals
             .iter()
             .filter(|local| local.kind != MirLocalKind::Param)
-            .count();
-        u32::try_from(mir_non_params + 4).expect("local count must fit in u32")
+            .map(|local| local_value_type(package, function, local))
+            .collect::<Vec<_>>();
+        locals.push(function_return_value_type(package, function).unwrap_or(WasmValueType::I32));
+        locals.extend([
+            WasmValueType::I32,
+            WasmValueType::I32,
+            WasmValueType::I32,
+            WasmValueType::I64,
+        ]);
+        locals
     }
 }
 
@@ -402,6 +461,15 @@ impl<'a, 'd> WatWriter<'a, 'd> {
         self.line(&format!(
             "  (import \"{WASM_HOST_MODULE}\" \"{WASM_IMPORT_DEBUG_STRING}\" (func $__maodie_debug_string (param i32 i32)))"
         ));
+        self.line(&format!(
+            "  (import \"{WASM_HOST_MODULE}\" \"{WASM_IMPORT_DEBUG_I32}\" (func $__maodie_debug_i32 (param i32)))"
+        ));
+        self.line(&format!(
+            "  (import \"{WASM_HOST_MODULE}\" \"{WASM_IMPORT_DEBUG_BOOL}\" (func $__maodie_debug_bool (param i32)))"
+        ));
+        self.line(&format!(
+            "  (import \"{WASM_HOST_MODULE}\" \"{WASM_IMPORT_DEBUG_LOG_END}\" (func $__maodie_debug_log_end))"
+        ));
         self.line(&format!("  (memory (export \"{WASM_MEMORY_EXPORT}\") 1)"));
 
         for entry in &self.strings.entries {
@@ -422,17 +490,23 @@ impl<'a, 'd> WatWriter<'a, 'd> {
 
     fn write_function(&mut self, function: &MirFunction) {
         let function_layout = FunctionLayout::new(function);
-        let result = self.function_result(function);
         let mut params = String::new();
         for local in function
             .locals
             .iter()
             .filter(|local| local.kind == MirLocalKind::Param)
         {
-            write!(params, " (param $v{} i32)", local.id.get())
-                .expect("writing to a String cannot fail");
+            write!(
+                params,
+                " (param $v{} {})",
+                local.id.get(),
+                wasm_value_type(self.package, local.ty).wat()
+            )
+            .expect("writing to a String cannot fail");
         }
-        let result_text = if result { " (result i32)" } else { "" };
+        let result_text = function_return_value_type(self.package, function)
+            .map(|ty| format!(" (result {})", ty.wat()))
+            .unwrap_or_default();
 
         self.line(&format!(
             "  (func ${}{}{}",
@@ -445,12 +519,22 @@ impl<'a, 'd> WatWriter<'a, 'd> {
             .iter()
             .filter(|local| local.kind != MirLocalKind::Param)
         {
-            self.line(&format!("    (local $v{} i32)", local.id.get()));
+            self.line(&format!(
+                "    (local $v{} {})",
+                local.id.get(),
+                local_value_type(self.package, function, local).wat()
+            ));
         }
-        self.line("    (local $__ret i32)");
+        self.line(&format!(
+            "    (local $__ret {})",
+            function_return_value_type(self.package, function)
+                .unwrap_or(WasmValueType::I32)
+                .wat()
+        ));
         self.line("    (local $__bb i32)");
         self.line("    (local $__done i32)");
         self.line("    (local $__matched i32)");
+        self.line("    (local $__string i64)");
         self.line("    (block $__exit");
         self.line("      (loop $__dispatch");
         self.line("        (br_if $__exit (local.get $__done))");
@@ -470,7 +554,7 @@ impl<'a, 'd> WatWriter<'a, 'd> {
         self.line("        (br $__dispatch)");
         self.line("      )");
         self.line("    )");
-        if result {
+        if self.function_result(function) {
             self.line("    (return (local.get $__ret))");
         } else {
             self.line("    (return)");
@@ -687,7 +771,7 @@ impl<'a, 'd> WatWriter<'a, 'd> {
         } else if let Some(value) = bool_literal_value(text) {
             format!("(i32.const {})", i32::from(value))
         } else if text.starts_with("string(") {
-            format!("(i32.const {})", self.strings.offset_for_literal(text))
+            format!("(i64.const {})", self.strings.handle_for_literal(text))
         } else {
             "(i32.const 0)".to_owned()
         }
@@ -705,24 +789,126 @@ impl<'a, 'd> WatWriter<'a, 'd> {
             ));
             return "(i32.const 0)".to_owned();
         };
-        let pointer = self.operand(message, function, function_layout);
-        let length = self.string_length(message);
 
+        if args.len() == 1 {
+            let chunk = self.log_string_chunk(message, function, function_layout);
+            return format!(
+                "(block (result i32) {chunk} (call $__maodie_debug_log_end) (i32.const 0))"
+            );
+        }
+
+        let Some(format) = self.log_format(message) else {
+            self.diagnostics.push(WasmDiagnostic::new(
+                "core.log formatted call without literal format lowered to unit",
+            ));
+            return "(i32.const 0)".to_owned();
+        };
+
+        let mut chunks = Vec::new();
+        self.push_formatted_log_chunks(&format, &args[1..], function, function_layout, &mut chunks);
+        chunks.push("(call $__maodie_debug_log_end)".to_owned());
+
+        format!("(block (result i32) {} (i32.const 0))", chunks.join(" "))
+    }
+
+    fn push_formatted_log_chunks(
+        &mut self,
+        format: &LogFormat,
+        args: &[MirOperand],
+        function: &MirFunction,
+        function_layout: &FunctionLayout,
+        chunks: &mut Vec<String>,
+    ) {
+        for (index, segment) in format.segments.iter().enumerate() {
+            if !segment.is_empty() {
+                chunks.push(self.log_text_chunk(segment));
+            }
+            if let Some(arg) = args.get(index) {
+                chunks.push(self.log_value_chunk(arg, function, function_layout));
+            }
+        }
+    }
+
+    fn log_format(&mut self, operand: &MirOperand) -> Option<LogFormat> {
+        if let MirOperand::Const(MirConstant::Literal(text)) = operand {
+            parse_log_format(text)
+        } else {
+            None
+        }
+    }
+
+    fn log_text_chunk(&self, text: &str) -> String {
+        let pointer = self.strings.offset_for_text(text).unwrap_or(0);
         format!(
-            "(block (result i32) (call $__maodie_debug_string {pointer} (i32.const {length})) (i32.const 0))"
+            "(call $__maodie_debug_string (i32.const {pointer}) (i32.const {}))",
+            text.len()
         )
     }
 
-    fn string_length(&mut self, operand: &MirOperand) -> usize {
+    fn log_string_chunk(
+        &self,
+        operand: &MirOperand,
+        function: &MirFunction,
+        function_layout: &FunctionLayout,
+    ) -> String {
         if let MirOperand::Const(MirConstant::Literal(text)) = operand {
-            string_literal_value(text)
-                .map(|value| value.len())
-                .unwrap_or_default()
-        } else {
-            self.diagnostics.push(WasmDiagnostic::new(
-                "core.log currently preserves length only for string literals; non-literal logs use length 0",
-            ));
-            0
+            if let Some(value) = string_literal_value(text) {
+                return self.log_text_chunk(&value);
+            }
+        }
+
+        let value = self.operand(operand, function, function_layout);
+        format!(
+            "(local.set $__string {value}) (call $__maodie_debug_string (i32.wrap_i64 (local.get $__string)) (i32.wrap_i64 (i64.shr_u (local.get $__string) (i64.const 32))))"
+        )
+    }
+
+    fn log_value_chunk(
+        &self,
+        operand: &MirOperand,
+        function: &MirFunction,
+        function_layout: &FunctionLayout,
+    ) -> String {
+        match self.operand_value_type(operand, function) {
+            WasmValueType::I64 => self.log_string_chunk(operand, function, function_layout),
+            WasmValueType::I32 => {
+                let value = self.operand(operand, function, function_layout);
+                if self.operand_is_bool(operand, function) {
+                    format!("(call $__maodie_debug_bool {value})")
+                } else {
+                    format!("(call $__maodie_debug_i32 {value})")
+                }
+            }
+        }
+    }
+
+    fn operand_value_type(&self, operand: &MirOperand, function: &MirFunction) -> WasmValueType {
+        match operand {
+            MirOperand::Const(MirConstant::Literal(text)) if text.starts_with("string(") => {
+                WasmValueType::I64
+            }
+            MirOperand::Copy(MirPlace::Local(local)) => function
+                .locals
+                .iter()
+                .find(|candidate| candidate.id == *local)
+                .map_or(WasmValueType::I32, |local| {
+                    local_value_type(self.package, function, local)
+                }),
+            _ => WasmValueType::I32,
+        }
+    }
+
+    fn operand_is_bool(&self, operand: &MirOperand, function: &MirFunction) -> bool {
+        match operand {
+            MirOperand::Const(MirConstant::Literal(text)) => text.starts_with("bool("),
+            MirOperand::Copy(MirPlace::Local(local)) => function
+                .locals
+                .iter()
+                .find(|candidate| candidate.id == *local)
+                .and_then(|local| local.ty)
+                .and_then(|ty| self.package.types.get(ty.get()))
+                .is_some_and(|ty| matches!(ty, MirTypeKind::Bool)),
+            _ => false,
         }
     }
 
@@ -789,24 +975,29 @@ impl<'a, 'd> BinaryWriter<'a, 'd> {
     fn type_section(&self, module: &mut Vec<u8>) {
         let mut payload = Vec::new();
         encode_u32(
-            1 + u32::try_from(self.package.functions.len()).expect("function count fits u32"),
+            3 + u32::try_from(self.package.functions.len()).expect("function count fits u32"),
             &mut payload,
         );
         payload.extend_from_slice(&[0x60, 0x02, 0x7f, 0x7f, 0x00]);
+        payload.extend_from_slice(&[0x60, 0x01, 0x7f, 0x00]);
+        payload.extend_from_slice(&[0x60, 0x00, 0x00]);
         for function in &self.package.functions {
             payload.push(0x60);
             let params = function
                 .locals
                 .iter()
                 .filter(|local| local.kind == MirLocalKind::Param)
-                .count();
+                .collect::<Vec<_>>();
             encode_u32(
-                u32::try_from(params).expect("param count fits u32"),
+                u32::try_from(params.len()).expect("param count fits u32"),
                 &mut payload,
             );
-            payload.extend(vec![0x7f; params]);
-            if self.function_result(function) {
-                payload.extend_from_slice(&[0x01, 0x7f]);
+            for param in params {
+                payload.push(wasm_value_type(self.package, param.ty).binary());
+            }
+            if let Some(result) = function_return_value_type(self.package, function) {
+                payload.push(0x01);
+                payload.push(result.binary());
             } else {
                 payload.push(0x00);
             }
@@ -816,9 +1007,12 @@ impl<'a, 'd> BinaryWriter<'a, 'd> {
 
     fn import_section(module: &mut Vec<u8>) {
         let mut payload = Vec::new();
-        encode_u32(2, &mut payload);
+        encode_u32(IMPORT_COUNT, &mut payload);
         import_func(WASM_HOST_MODULE, WASM_IMPORT_PANIC, 0, &mut payload);
         import_func(WASM_HOST_MODULE, WASM_IMPORT_DEBUG_STRING, 0, &mut payload);
+        import_func(WASM_HOST_MODULE, WASM_IMPORT_DEBUG_I32, 1, &mut payload);
+        import_func(WASM_HOST_MODULE, WASM_IMPORT_DEBUG_BOOL, 1, &mut payload);
+        import_func(WASM_HOST_MODULE, WASM_IMPORT_DEBUG_LOG_END, 2, &mut payload);
         section(2, payload, module);
     }
 
@@ -830,7 +1024,7 @@ impl<'a, 'd> BinaryWriter<'a, 'd> {
         );
         for (index, _) in self.package.functions.iter().enumerate() {
             encode_u32(
-                1 + u32::try_from(index).expect("type index fits u32"),
+                3 + u32::try_from(index).expect("type index fits u32"),
                 &mut payload,
             );
         }
@@ -908,9 +1102,15 @@ impl<'a, 'd> BinaryWriter<'a, 'd> {
     fn function_body(&mut self, function: &MirFunction) -> Vec<u8> {
         let function_layout = FunctionLayout::new(function);
         let mut body = Vec::new();
-        encode_u32(1, &mut body);
-        encode_u32(FunctionLayout::declared_local_count(function), &mut body);
-        body.push(0x7f);
+        let local_groups = FunctionLayout::declared_local_groups(function, self.package);
+        encode_u32(
+            u32::try_from(local_groups.len()).expect("local group count fits u32"),
+            &mut body,
+        );
+        for value_type in local_groups {
+            encode_u32(1, &mut body);
+            body.push(value_type.binary());
+        }
 
         body.extend_from_slice(&[0x02, 0x40, 0x03, 0x40]);
         instr_local_get(function_layout.done, &mut body);
@@ -1124,23 +1324,133 @@ impl<'a, 'd> BinaryWriter<'a, 'd> {
             return;
         };
 
-        self.operand(message, function, function_layout, body);
-        instr_i32_const(usize_to_i32(self.string_length(message)), body);
-        body.push(0x10);
-        encode_u32(DEBUG_STRING_IMPORT_INDEX, body);
+        if args.len() == 1 {
+            self.log_string_chunk(message, function, function_layout, body);
+            instr_call(DEBUG_LOG_END_IMPORT_INDEX, body);
+            instr_i32_const(0, body);
+            return;
+        }
+
+        let Some(format) = self.log_format(message) else {
+            self.diagnostics.push(WasmDiagnostic::new(
+                "core.log formatted call without literal format lowered to unit",
+            ));
+            instr_i32_const(0, body);
+            return;
+        };
+
+        self.formatted_log_chunks(&format, &args[1..], function, function_layout, body);
+        instr_call(DEBUG_LOG_END_IMPORT_INDEX, body);
         instr_i32_const(0, body);
     }
 
-    fn string_length(&mut self, operand: &MirOperand) -> usize {
+    fn log_format(&mut self, operand: &MirOperand) -> Option<LogFormat> {
         if let MirOperand::Const(MirConstant::Literal(text)) = operand {
-            string_literal_value(text)
-                .map(|value| value.len())
-                .unwrap_or_default()
+            parse_log_format(text)
         } else {
-            self.diagnostics.push(WasmDiagnostic::new(
-                "core.log currently preserves length only for string literals; non-literal logs use length 0",
-            ));
-            0
+            None
+        }
+    }
+
+    fn formatted_log_chunks(
+        &mut self,
+        format: &LogFormat,
+        args: &[MirOperand],
+        function: &MirFunction,
+        function_layout: &FunctionLayout,
+        body: &mut Vec<u8>,
+    ) {
+        for (index, segment) in format.segments.iter().enumerate() {
+            if !segment.is_empty() {
+                self.log_text_chunk(segment, body);
+            }
+            if let Some(arg) = args.get(index) {
+                self.log_value_chunk(arg, function, function_layout, body);
+            }
+        }
+    }
+
+    fn log_text_chunk(&self, text: &str, body: &mut Vec<u8>) {
+        instr_i32_const(
+            u32_to_i32(self.strings.offset_for_text(text).unwrap_or(0)),
+            body,
+        );
+        instr_i32_const(usize_to_i32(text.len()), body);
+        instr_call(DEBUG_STRING_IMPORT_INDEX, body);
+    }
+
+    fn log_string_chunk(
+        &self,
+        operand: &MirOperand,
+        function: &MirFunction,
+        function_layout: &FunctionLayout,
+        body: &mut Vec<u8>,
+    ) {
+        if let MirOperand::Const(MirConstant::Literal(text)) = operand {
+            if let Some(value) = string_literal_value(text) {
+                self.log_text_chunk(&value, body);
+                return;
+            }
+        }
+
+        self.operand(operand, function, function_layout, body);
+        instr_local_set(function_layout.string_scratch, body);
+        instr_local_get(function_layout.string_scratch, body);
+        body.push(0xa7);
+        instr_local_get(function_layout.string_scratch, body);
+        instr_i64_const(32, body);
+        body.push(0x88);
+        body.push(0xa7);
+        instr_call(DEBUG_STRING_IMPORT_INDEX, body);
+    }
+
+    fn log_value_chunk(
+        &self,
+        operand: &MirOperand,
+        function: &MirFunction,
+        function_layout: &FunctionLayout,
+        body: &mut Vec<u8>,
+    ) {
+        match self.operand_value_type(operand, function) {
+            WasmValueType::I64 => self.log_string_chunk(operand, function, function_layout, body),
+            WasmValueType::I32 => {
+                self.operand(operand, function, function_layout, body);
+                if self.operand_is_bool(operand, function) {
+                    instr_call(DEBUG_BOOL_IMPORT_INDEX, body);
+                } else {
+                    instr_call(DEBUG_I32_IMPORT_INDEX, body);
+                }
+            }
+        }
+    }
+
+    fn operand_value_type(&self, operand: &MirOperand, function: &MirFunction) -> WasmValueType {
+        match operand {
+            MirOperand::Const(MirConstant::Literal(text)) if text.starts_with("string(") => {
+                WasmValueType::I64
+            }
+            MirOperand::Copy(MirPlace::Local(local)) => function
+                .locals
+                .iter()
+                .find(|candidate| candidate.id == *local)
+                .map_or(WasmValueType::I32, |local| {
+                    local_value_type(self.package, function, local)
+                }),
+            _ => WasmValueType::I32,
+        }
+    }
+
+    fn operand_is_bool(&self, operand: &MirOperand, function: &MirFunction) -> bool {
+        match operand {
+            MirOperand::Const(MirConstant::Literal(text)) => text.starts_with("bool("),
+            MirOperand::Copy(MirPlace::Local(local)) => function
+                .locals
+                .iter()
+                .find(|candidate| candidate.id == *local)
+                .and_then(|local| local.ty)
+                .and_then(|ty| self.package.types.get(ty.get()))
+                .is_some_and(|ty| matches!(ty, MirTypeKind::Bool)),
+            _ => false,
         }
     }
 
@@ -1200,7 +1510,7 @@ impl<'a, 'd> BinaryWriter<'a, 'd> {
         } else if let Some(value) = bool_literal_value(text) {
             instr_i32_const(i32::from(value), body);
         } else if text.starts_with("string(") {
-            instr_i32_const(u32_to_i32(self.strings.offset_for_literal(text)), body);
+            instr_i64_const(self.strings.handle_for_literal(text), body);
         } else {
             instr_i32_const(0, body);
         }
@@ -1412,6 +1722,56 @@ fn is_core_log_symbol(package: &MirPackage, symbol: SymbolId) -> bool {
         })
 }
 
+fn function_return_value_type(
+    package: &MirPackage,
+    function: &MirFunction,
+) -> Option<WasmValueType> {
+    function.return_type.and_then(|ty| {
+        let kind = package.types.get(ty.get())?;
+        if matches!(kind, MirTypeKind::Unit | MirTypeKind::Error) {
+            None
+        } else {
+            Some(wasm_value_type(package, Some(ty)))
+        }
+    })
+}
+
+fn wasm_value_type(package: &MirPackage, ty: Option<crate::typeck::TypeId>) -> WasmValueType {
+    ty.and_then(|ty| package.types.get(ty.get()))
+        .map_or(WasmValueType::I32, |kind| match kind {
+            MirTypeKind::String => WasmValueType::I64,
+            _ => WasmValueType::I32,
+        })
+}
+
+fn local_value_type(
+    package: &MirPackage,
+    function: &MirFunction,
+    local: &crate::mir::MirLocal,
+) -> WasmValueType {
+    if wasm_value_type(package, local.ty) == WasmValueType::I64
+        && local_is_variant_projection(function, local.id)
+    {
+        return WasmValueType::I32;
+    }
+    wasm_value_type(package, local.ty)
+}
+
+fn local_is_variant_projection(function: &MirFunction, local: MirLocalId) -> bool {
+    function.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                statement,
+                MirStatement::Assign {
+                    place: MirPlace::Local(target),
+                    value: MirRvalue::ProjectVariant { .. },
+                    ..
+                } if *target == local
+            )
+        })
+    })
+}
+
 fn usize_to_u32(value: usize) -> u32 {
     u32::try_from(value).expect("MIR index must fit in u32")
 }
@@ -1430,11 +1790,6 @@ fn int_literal_value(text: &str) -> Option<i32> {
 
 fn bool_literal_value(text: &str) -> Option<bool> {
     text.strip_prefix("bool(")?.strip_suffix(')')?.parse().ok()
-}
-
-fn string_literal_value(text: &str) -> Option<String> {
-    let raw = text.strip_prefix("string(")?.strip_suffix(')')?;
-    Some(raw.trim_matches('"').to_owned())
 }
 
 fn wasm_name(name: &str) -> String {
@@ -1488,6 +1843,11 @@ fn instr_i32_const(value: i32, body: &mut Vec<u8>) {
     encode_i32(value, body);
 }
 
+fn instr_i64_const(value: i64, body: &mut Vec<u8>) {
+    body.push(0x42);
+    encode_i64(value, body);
+}
+
 fn instr_local_get(index: u32, body: &mut Vec<u8>) {
     body.push(0x20);
     encode_u32(index, body);
@@ -1508,6 +1868,11 @@ fn instr_br_if(depth: u32, body: &mut Vec<u8>) {
     encode_u32(depth, body);
 }
 
+fn instr_call(index: u32, body: &mut Vec<u8>) {
+    body.push(0x10);
+    encode_u32(index, body);
+}
+
 fn encode_u32(mut value: u32, bytes: &mut Vec<u8>) {
     loop {
         let mut byte = u8::try_from(value & 0x7f).expect("masked LEB128 byte must fit u8");
@@ -1523,6 +1888,18 @@ fn encode_u32(mut value: u32, bytes: &mut Vec<u8>) {
 }
 
 fn encode_i32(mut value: i32, bytes: &mut Vec<u8>) {
+    loop {
+        let byte = u8::try_from(value & 0x7f).expect("masked LEB128 byte must fit u8");
+        value >>= 7;
+        let done = (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0);
+        bytes.push(if done { byte } else { byte | 0x80 });
+        if done {
+            break;
+        }
+    }
+}
+
+fn encode_i64(mut value: i64, bytes: &mut Vec<u8>) {
     loop {
         let byte = u8::try_from(value & 0x7f).expect("masked LEB128 byte must fit u8");
         value >>= 7;
@@ -1620,10 +1997,48 @@ fn main(value: i32) -> Result<i32, String> {
 
         assert!(artifacts.wat.contains("Hello world"));
         assert!(artifacts.wat.contains("call $__maodie_debug_string"));
+        assert!(artifacts.wat.contains("call $__maodie_debug_log_end"));
         assert!(artifacts.wat.contains("(i32.const 11)"));
         assert_eq!(
             run_i32_export(&mir, "main", &[7]).expect("golden runs") >> 8,
             7
         );
+    }
+
+    #[test]
+    fn lowers_formatted_core_log_chunks_and_string_handles() {
+        let source = SourceFile::new(
+            SourceId::new(1),
+            "formatted_log.mao",
+            "\
+module demo
+import core.Result
+import core.log
+
+fn label() -> String { return \"ok\" }
+
+fn main(value: i32) -> Result<i32, String> {
+  let enabled: bool = true
+  let message: String = label()
+  log(\"value is {} {} {}\", value, enabled, message)
+  return Result.Ok(value)
+}
+",
+        );
+
+        let typed = check_source_with_core(&source);
+        assert!(typed.diagnostics.is_empty(), "{:#?}", typed.diagnostics);
+        let mir = lower_package(&typed);
+        let artifacts = compile_mir_to_wasm(&mir);
+
+        assert!(artifacts.wat.contains("debug_i32"));
+        assert!(artifacts.wat.contains("debug_bool"));
+        assert!(artifacts.wat.contains("debug_log_end"));
+        assert!(artifacts.wat.contains("(result i64)"));
+        assert!(artifacts.wat.contains("(local $__string i64)"));
+        assert!(artifacts.wat.contains("i64.shr_u"));
+        assert!(artifacts.wat.contains("value is "));
+        assert!(artifacts.wat.contains("(i32.const 1)"));
+        assert_eq!(&artifacts.wasm[..4], b"\0asm");
     }
 }

@@ -2,6 +2,7 @@
 
 mod ast;
 mod highlight;
+mod incremental;
 mod lexer;
 mod parser;
 
@@ -11,6 +12,10 @@ pub use ast::{
     Pattern, Statement, StructDecl, TraitDecl, TypeRef,
 };
 pub use highlight::{highlight_source, HighlightKind, HighlightResult, HighlightToken};
+pub use incremental::{
+    HighlightEdit, IncrementalHighlightError, IncrementalHighlightSession,
+    IncrementalHighlightUpdate,
+};
 pub use lexer::{
     lex_source, Keyword, LexResult, Lexer, Token, TokenKind, MD_INVALID_CHARACTER,
     MD_UNTERMINATED_BLOCK_COMMENT, MD_UNTERMINATED_STRING,

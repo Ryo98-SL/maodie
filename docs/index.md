@@ -14,6 +14,7 @@ The docs module owns project documentation that guides Maodie language design, i
 
 - `tasks/README.md`: task graph, handoff protocol, and completion rules for Maodie v1.
 - `tasks/01-rust-workspace-and-nx-bridge.md`: Rust workspace, crate naming, and Nx bridge entry points.
+- `tasks/15-core-log-formatting.md`: completed `core.log` formatting task and String handle handoff notes.
 - `tasks/highlighting/README.md`: syntax highlighting task chain and links to Web IDE, VSCode, and JetBrains adapter contracts.
 - `v1-acceptance-report.md`: v1 closure checklist for examples, CLI, IDE, diagnostics, and future scope.
 

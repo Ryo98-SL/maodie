@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./highlight-worker": {
+      "types": "./dist/highlight.worker.d.ts",
+      "default": "./dist/highlight.worker.js"
     }
   }
 }

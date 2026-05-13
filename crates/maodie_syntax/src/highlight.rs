@@ -1,7 +1,7 @@
 use maodie_diagnostics::{Diagnostic, SourceFile, TextRange};
 use serde::{Deserialize, Serialize};
 
-use crate::{lex_source, TokenKind};
+use crate::{lex_source, Token, TokenKind};
 
 /// Result produced by a syntax highlighting pass.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -66,7 +66,19 @@ pub fn highlight_source(source: &SourceFile) -> HighlightResult {
     }
 }
 
-fn highlight_kind_for_token(kind: TokenKind) -> Option<HighlightKind> {
+pub(crate) fn highlight_tokens_from_lex_tokens(tokens: &[Token]) -> Vec<HighlightToken> {
+    tokens
+        .iter()
+        .filter_map(|token| {
+            highlight_kind_for_token(token.kind).map(|kind| HighlightToken {
+                kind,
+                range: token.range,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn highlight_kind_for_token(kind: TokenKind) -> Option<HighlightKind> {
     match kind {
         TokenKind::Whitespace | TokenKind::Eof => None,
         TokenKind::LineComment | TokenKind::BlockComment => Some(HighlightKind::Comment),

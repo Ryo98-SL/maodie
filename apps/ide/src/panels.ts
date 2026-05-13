@@ -56,6 +56,41 @@ export function renderEvaluation(state: IdeState): string {
 }
 
 export function renderDiagnostics(state: IdeState): string {
+  return `
+    <section class="space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="text-xs font-semibold uppercase tracking-normal text-neutral-400">Live Lexer</h3>
+        <span class="text-xs text-neutral-500">${liveLexerCountLabel(state)}</span>
+      </div>
+      ${renderLiveLexerDiagnostics(state)}
+    </section>
+    <section class="space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="text-xs font-semibold uppercase tracking-normal text-neutral-400">Last Compile</h3>
+        <span class="text-xs text-neutral-500">${compileDiagnosticCountLabel(state.result)}</span>
+      </div>
+      ${renderLastCompileDiagnostics(state)}
+    </section>
+  `;
+}
+
+function renderLiveLexerDiagnostics(state: IdeState): string {
+  if (state.liveLexer.errorMessage) {
+    return diagnosticPanel("error", "实时词法检查失败", state.liveLexer.errorMessage);
+  }
+  if (state.liveLexer.status === "loading") {
+    return diagnosticPanel("info", "正在加载实时词法检查", "编辑器正在启动 highlight worker。");
+  }
+  if (state.liveLexer.diagnostics.length === 0) {
+    return diagnosticPanel("success", "Live Lexer 通过", "当前源码没有词法诊断。");
+  }
+
+  return state.liveLexer.diagnostics
+    .map((diagnostic) => renderDiagnostic(diagnostic, "Live Lexer"))
+    .join("");
+}
+
+function renderLastCompileDiagnostics(state: IdeState): string {
   if (state.errorMessage) {
     return diagnosticPanel("error", "WASM 加载失败", state.errorMessage);
   }
@@ -68,13 +103,15 @@ export function renderDiagnostics(state: IdeState): string {
 
   const diagnostics = state.result?.diagnostics ?? [];
   if (diagnostics.length === 0) {
-    return diagnosticPanel("success", "通过", "没有诊断。");
+    return state.result
+      ? diagnosticPanel("success", "Last Compile 通过", "上次编译没有诊断。")
+      : diagnosticPanel("info", "未运行编译", "点击 Run 后显示 parser/typechecker 编译诊断。");
   }
 
-  return diagnostics.map(renderDiagnostic).join("");
+  return diagnostics.map((diagnostic) => renderDiagnostic(diagnostic, "Last Compile")).join("");
 }
 
-function renderDiagnostic(diagnostic: Diagnostic): string {
+function renderDiagnostic(diagnostic: Diagnostic, sourceLabel: "Live Lexer" | "Last Compile"): string {
   const location = diagnostic.span
     ? `${diagnostic.span.fileName}:${diagnostic.span.start.line}:${diagnostic.span.start.column}`
     : "无源码位置";
@@ -88,6 +125,7 @@ function renderDiagnostic(diagnostic: Diagnostic): string {
   return `
     <article class="${severityClass(diagnostic.severity)} rounded border p-3">
       <div class="mb-2 flex flex-wrap items-center gap-2">
+        <span class="rounded border border-current/30 px-1.5 py-0.5 text-[0.68rem] font-semibold uppercase tracking-normal">${sourceLabel}</span>
         <span class="text-xs font-semibold uppercase tracking-normal">${diagnostic.severity}</span>
         <span class="text-xs text-neutral-400">${diagnostic.code}</span>
       </div>
@@ -122,6 +160,29 @@ function severityClass(severity: Diagnostic["severity"]): string {
   }
 
   return "border-cyan-500/35 bg-cyan-500/10 text-cyan-100";
+}
+
+export function diagnosticsSummaryLabel(state: IdeState): string {
+  return `${liveLexerCountLabel(state)} / ${compileDiagnosticCountLabel(state.result)}`;
+}
+
+function liveLexerCountLabel(state: IdeState): string {
+  if (state.liveLexer.status === "loading") {
+    return "loading";
+  }
+  if (state.liveLexer.errorMessage) {
+    return "failed";
+  }
+
+  return `${state.liveLexer.diagnostics.length} live`;
+}
+
+function compileDiagnosticCountLabel(result: IdeState["result"]): string {
+  if (!result) {
+    return "not run";
+  }
+
+  return `${result.diagnostics.length} compile`;
 }
 
 function escapeHtml(value: string): string {

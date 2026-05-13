@@ -26,7 +26,7 @@ Maodie v1 is accepted as a runnable loop from `.mao` source through the Rust com
 - Core `Option<T>`, `Result<T,E>`, `String`, and `Slice<T>` declarations.
 - `?` propagation for `Result<T,E>`.
 - WAT and WASM artifacts plus AST, HIR, MIR, WAT, and type dumps.
-- Runtime logging through `core.log("...")` for string literals, lowered to `maodie.debug_string(ptr, len)`.
+- Runtime logging through `core.log("...")` and minimal `core.log("{}", value)` formatting, lowered to `maodie` debug chunk imports.
 - CLI diagnostics with Chinese severity labels and stable `MD####` codes.
 - Browser IDE editing, compile status, diagnostics, artifact metadata, and dump tabs.
 

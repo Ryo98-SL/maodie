@@ -881,12 +881,14 @@ impl<'typed, 'index> FunctionLowerer<'typed, 'index> {
     }
 
     fn lower(mut self) -> MirFunction {
-        let return_type = self
-            .function
-            .body
-            .as_ref()
-            .and_then(|body| self.type_index.expr_type(&self.function.name, body.span))
-            .or_else(|| self.return_type_from_item());
+        let return_type = self.return_type_from_item().or_else(|| {
+            self.return_type_from_return_statement().or_else(|| {
+                self.function
+                    .body
+                    .as_ref()
+                    .and_then(|body| self.type_index.expr_type(&self.function.name, body.span))
+            })
+        });
 
         if let Some(body) = &self.function.body {
             let tail = self.lower_block(body);
@@ -938,6 +940,34 @@ impl<'typed, 'index> FunctionLowerer<'typed, 'index> {
             return None;
         };
         Some(*return_type)
+    }
+
+    fn return_type_from_return_statement(&self) -> Option<TypeId> {
+        let body = self.function.body.as_ref()?;
+        self.return_type_from_block(body)
+    }
+
+    fn return_type_from_block(&self, block: &HirBlock) -> Option<TypeId> {
+        for statement in &block.statements {
+            match statement {
+                HirStatement::Return {
+                    expr: Some(expr), ..
+                } => {
+                    return self
+                        .type_index
+                        .expr_type(&self.function.name, expr_span(expr));
+                }
+                HirStatement::Expr(HirExpr::Block(block)) => {
+                    if let Some(ty) = self.return_type_from_block(block) {
+                        return Some(ty);
+                    }
+                }
+                HirStatement::Let(_)
+                | HirStatement::Return { expr: None, .. }
+                | HirStatement::Expr(_) => {}
+            }
+        }
+        None
     }
 
     fn lower_block(&mut self, block: &HirBlock) -> Option<MirOperand> {

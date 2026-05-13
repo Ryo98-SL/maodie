@@ -59,7 +59,7 @@ For the WASM backend, a `String` value at the host boundary is represented as a 
 - encoding: UTF-8
 - ownership: borrowed unless a later API explicitly states otherwise
 
-Task 10 should lower string literals by placing UTF-8 bytes in module data or another deterministic readonly allocation strategy, then pass pointer and byte length through the host glue. v1 does not require mutation, concatenation, formatting, or allocation APIs for `String`.
+Task 10 lowers string literals by placing UTF-8 bytes in module data. Direct `String` values use a packed WASM `i64` handle: low 32 bits are the UTF-8 pointer and high 32 bits are the byte length. v1 does not require mutation, concatenation, allocation APIs, or `String` payload layout inside structs/enums.
 
 ## Slice And Array Minimum
 
@@ -83,12 +83,17 @@ Minimum imports reserved for task 10:
 
 - `maodie.panic(ptr: i32, len: i32) -> unit`
 - `maodie.debug_string(ptr: i32, len: i32) -> unit`
+- `maodie.debug_i32(value: i32) -> unit`
+- `maodie.debug_bool(value: i32) -> unit`
+- `maodie.debug_log_end() -> unit`
 
 The source-level logging API is:
 
 - `core.log(message: String) -> unit`
 
-`core.log("Hello world")` lowers to `maodie.debug_string(ptr, len)` in the WASM backend. In v1, string literal logs preserve UTF-8 byte length. Non-literal `String` values are accepted by the type checker, but the WASM backend records a limitation diagnostic and passes length `0` until owned string metadata exists.
+`core.log("Hello world")` lowers to a string debug chunk followed by `debug_log_end`. `core.log("value is {}", value)` is a compiler-recognized formatting form: the first argument must be a string literal, `{}` placeholder count must match the following arguments, and interpolation arguments may be direct `i32`, `bool`, or `String` values. The host appends debug chunks and flushes one log line on `debug_log_end`.
+
+Formatting is intentionally minimal: there is no standalone `format()` function, no formatting options, no named arguments, and no `{{` / `}}` escape behavior.
 
 The runtime glue intentionally excludes filesystem, network, time, path, package management, and general IO. These names are exposed as constants from `maodie_compiler::core`.
 
@@ -98,6 +103,6 @@ Core tests live in `maodie_compiler::core` and cover:
 
 - resolving `core.Option`, `core.Result`, and `core.Slice` imports
 - type-checking `Option`, `Result`, `String`, and `Slice`
-- lowering `core.log("Hello world")` to the `maodie.debug_string` host import
+- lowering `core.log("Hello world")` and formatted `core.log("{}", value)` calls to `maodie` debug chunk imports
 - lowering a `Result` `?` expression from core-loaded source into MIR
 - checking the stable WASM glue names

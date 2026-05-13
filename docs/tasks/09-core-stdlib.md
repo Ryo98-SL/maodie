@@ -63,6 +63,7 @@
 - `String` 保持为编译器内建类型；字符串字面量在 MIR 中保持 literal 常量，WASM 边界按 UTF-8 `(ptr: i32, len: i32)` 借用切片表示。
 - `Result` 的特殊识别点保持和任务 07/08 对齐：类型检查和 MIR lowering 均按最终名称 `Result`、变体 `Ok`/`Err`、两个泛型参数识别。
 - WASM host glue 最小约定写入 `docs/core-stdlib.md` 和 `docs/tasks/10-wasm-backend.md`，并在 `maodie_compiler::core` 中公开 `maodie`、`panic`、`debug_string`、`memory` 常量，供任务 10 使用。`core.log("...")` 由任务 10 的 WASM backend 降到 `debug_string(ptr, len)`。
+- 任务 15 已扩展 `core.log` 为 debug chunk imports 和最小 `{}` 插值；读取当前日志契约时以 `docs/core-stdlib.md` 和 `docs/tasks/15-core-log-formatting.md` 为准。
 
 验证：
 

@@ -19,8 +19,8 @@ pub const CORE_SOURCE_NAME: &str = "core.mao";
 ///
 /// `String` remains a compiler built-in type in v1. `Option`, `Result`, and
 /// `Slice` are ordinary source declarations loaded before user modules. `log`
-/// is declared as a host-backed function and lowered by the WASM backend to
-/// `maodie.debug_string(ptr, len)`.
+/// is declared as a host-backed function. The type checker and WASM backend
+/// recognize `core.log` specially to support minimal `{}` interpolation.
 pub const CORE_SOURCE: &str = "\
 module core
 
@@ -43,6 +43,15 @@ pub const WASM_IMPORT_PANIC: &str = "panic";
 
 /// Host import name for writing a debug string slice.
 pub const WASM_IMPORT_DEBUG_STRING: &str = "debug_string";
+
+/// Host import name for writing a debug i32 chunk.
+pub const WASM_IMPORT_DEBUG_I32: &str = "debug_i32";
+
+/// Host import name for writing a debug bool chunk.
+pub const WASM_IMPORT_DEBUG_BOOL: &str = "debug_bool";
+
+/// Host import name for ending one formatted debug log line.
+pub const WASM_IMPORT_DEBUG_LOG_END: &str = "debug_log_end";
 
 /// Linear-memory export name expected by host glue.
 pub const WASM_MEMORY_EXPORT: &str = "memory";
@@ -97,6 +106,7 @@ mod tests {
 
     use super::{
         check_source_with_core, core_source, resolve_source_with_core, WASM_HOST_MODULE,
+        WASM_IMPORT_DEBUG_BOOL, WASM_IMPORT_DEBUG_I32, WASM_IMPORT_DEBUG_LOG_END,
         WASM_IMPORT_DEBUG_STRING, WASM_IMPORT_PANIC, WASM_MEMORY_EXPORT,
     };
     use crate::mir::lower_package;
@@ -207,6 +217,9 @@ fn main(value: i32) -> Result<i32, String> {
         assert_eq!(WASM_HOST_MODULE, "maodie");
         assert_eq!(WASM_IMPORT_PANIC, "panic");
         assert_eq!(WASM_IMPORT_DEBUG_STRING, "debug_string");
+        assert_eq!(WASM_IMPORT_DEBUG_I32, "debug_i32");
+        assert_eq!(WASM_IMPORT_DEBUG_BOOL, "debug_bool");
+        assert_eq!(WASM_IMPORT_DEBUG_LOG_END, "debug_log_end");
         assert_eq!(WASM_MEMORY_EXPORT, "memory");
     }
 }

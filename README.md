@@ -9,7 +9,7 @@ Maodie is a planned compiled programming language with a companion IDE. This rep
 - `packages/compiler-wasm`: TypeScript wrapper that loads the Rust WASM compiler and syntax highlighter in Node or browsers.
 - `packages/cli`: the `maodie` command line shell around the compiler.
 - `packages/ide-protocol`: shared contracts between IDE clients and language services.
-- `apps/ide`: a Vite-powered Web IDE that edits `.mao` source, switches between built-in examples, runs the WASM compiler on demand, and shows diagnostics plus AST/HIR/MIR/WAT dumps.
+- `apps/ide`: a Vite-powered Web IDE that edits `.mao` source in Monaco Editor, renders lexer-backed semantic tokens and live lexer diagnostics, switches between built-in examples, runs the WASM compiler on demand, and shows compile diagnostics plus AST/HIR/MIR/WAT dumps.
 - `crates/maodie_compiler`: Rust compiler facade crate in the Cargo workspace.
 - `crates/maodie_wasm_api`: low-level WebAssembly ABI around the Rust compiler facade.
 - `docs/tasks`: v1 implementation task handbook with handoff rules.
@@ -26,7 +26,9 @@ pnpm ide:dev
 pnpm graph
 ```
 
-Rust tasks can also be invoked through Nx directly, for example `pnpm nx run rust:build`, `pnpm nx run rust:test`, `pnpm nx run rust:check`, and `pnpm nx run rust:wasm-build`. Cargo build artifacts stay in the ignored `target/` directory. The compiler WASM wrapper builds and loads `target/wasm32-unknown-unknown/debug/maodie_wasm_api.wasm` by default in Node; the browser IDE imports that same build output through Vite's `?url` asset handling. `@maodie/compiler-wasm` also exposes `highlightMaodieSource` for lexer-backed syntax tokens without running the full compile pipeline, plus UTF-8 byte range to UTF-16 editor range helpers for downstream adapters.
+Rust tasks can also be invoked through Nx directly, for example `pnpm nx run rust:build`, `pnpm nx run rust:test`, `pnpm nx run rust:check`, and `pnpm nx run rust:wasm-build`. Cargo build artifacts stay in the ignored `target/` directory. The compiler WASM wrapper builds and loads `target/wasm32-unknown-unknown/debug/maodie_wasm_api.wasm` by default in Node; the browser IDE imports that same build output through Vite's `?url` asset handling for both compile and live highlight worker sessions. `@maodie/compiler-wasm` also exposes `highlightMaodieSource` for lexer-backed syntax tokens without running the full compile pipeline, plus UTF-8 byte range to UTF-16 editor range helpers for downstream adapters.
+
+For the Web IDE incremental highlighting browser smoke, start `pnpm ide:dev`, launch Chrome with a remote debugging port, then run `node tools/ide-highlight-smoke.mjs <ide-url> <chrome-devtools-url>`. The smoke harness drives Monaco through the narrow `window.maodieIdeEditor` test API instead of editor DOM internals.
 
 Shared syntax highlight fixtures live under `docs/tasks/highlighting/fixtures/`. They lock the Rust/WASM/TS token contract, including Chinese identifiers, comments, literals, and error tokens.
 

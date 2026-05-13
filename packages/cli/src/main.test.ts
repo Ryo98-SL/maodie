@@ -153,6 +153,38 @@ fn main(value: i32) -> Result<i32, String> {
     expect(stdout.text()).toBe("Hello world\n");
     expect(stderr.text()).toContain("警告[MD9001]");
   });
+
+  it("runs a formatted core.log program as one stdout line", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "maodie-cli-log-format-"));
+    await writeFile(
+      join(cwd, "formatted.mao"),
+      `module demo
+import core.Result
+import core.log
+
+fn label() -> String { return "ok" }
+
+fn main(value: i32) -> Result<i32, String> {
+  let enabled: bool = true
+  let message: String = label()
+  log("value is {} {} {}", value, enabled, message)
+  return Result.Ok(value)
+}
+`
+    );
+    const stdout = new MemoryStream();
+    const stderr = new MemoryStream();
+
+    const exitCode = await runCli(["run", "formatted.mao", "--input", "5"], {
+      cwd,
+      stdout,
+      stderr
+    });
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("value is 5 true ok\n");
+    expect(stderr.text()).toContain("警告[MD9001]");
+  });
 });
 
 async function readExample(filename: string): Promise<string> {

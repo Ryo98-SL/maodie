@@ -1,0 +1,91 @@
+name: Deploy Web IDE to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow the workflow to push to the github-pages environment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Avoid stacking redundant deploys: cancel an in-flight run if a new commit lands,
+# but let an already-running deploy finish so the live site is never left half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup Rust toolchain (with wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      # The IDE imports the wasm artifact via:
+      #   target/wasm32-unknown-unknown/debug/maodie_wasm_api.wasm?url
+      # so we need the debug profile build before vite resolves the asset.
+      - name: Build WASM (debug, matches IDE asset path)
+        run: pnpm rust:wasm
+
+      - name: Build Web IDE
+        env:
+          # Project pages live at https://<owner>.github.io/<repo>/ — set base accordingly.
+          IDE_BASE: /${{ github.event.repository.name }}/
+        run: pnpm ide:build
+
+      # GitHub Pages serves through Jekyll by default, which silently strips paths
+      # starting with `_`. Drop a marker so Vite's `_assets/` (and similar) survive.
+      - name: Disable Jekyll processing
+        run: touch dist/apps/ide/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/apps/ide
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

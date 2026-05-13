@@ -156,6 +156,20 @@ impl<'source> Lexer<'source> {
         }
     }
 
+    pub(crate) fn with_offset(source: &'source SourceFile, offset: usize) -> Self {
+        assert!(
+            offset <= source.len_bytes() && source.text().is_char_boundary(offset),
+            "lexer offset must be a valid UTF-8 boundary"
+        );
+
+        Self {
+            source,
+            offset,
+            tokens: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     /// Runs the lexer to EOF.
     #[must_use]
     pub fn lex(mut self) -> LexResult {
@@ -169,6 +183,29 @@ impl<'source> Lexer<'source> {
             tokens: self.tokens,
             diagnostics: self.diagnostics,
         }
+    }
+
+    pub(crate) fn next_token(&mut self) -> Option<Token> {
+        if self.is_eof() {
+            if self
+                .tokens
+                .last()
+                .is_some_and(|token| token.kind == TokenKind::Eof)
+            {
+                return None;
+            }
+
+            self.push_token(TokenKind::Eof, self.offset, self.offset);
+            return self.tokens.last().cloned();
+        }
+
+        let token_index = self.tokens.len();
+        self.lex_one();
+        self.tokens.get(token_index).cloned()
+    }
+
+    pub(crate) fn drain_diagnostics(&mut self) -> Vec<Diagnostic> {
+        self.diagnostics.drain(..).collect()
     }
 
     fn lex_one(&mut self) {
